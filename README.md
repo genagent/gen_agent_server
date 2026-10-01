@@ -70,9 +70,10 @@ mix gen_agent_server.remote --instance home result INVOCATION_ID
 
 The default `server/default` instance remains available and uses
 `GEN_AGENT_SERVER_PROVIDERS` and `GEN_AGENT_SERVER_CWD`. Profile names must be
-unique and cannot contain `/`. A missing directory, unknown provider, or
-duplicate name fails startup. Profiles currently use the same read-only
-Claude/Codex settings as the default. A profile can opt in to edits with
+unique and cannot contain `/` or control characters. A missing directory,
+unknown provider, or duplicate name fails startup. Profiles currently use the
+same read-only Claude/Codex settings as the default. A profile can opt in to
+edits with
 `"codex_sandbox": "workspace_write"` and/or
 `"claude_permission_mode": "accept_edits"`. Codex then uses its workspace
 write sandbox with approvals disabled; Claude uses its CLI's accept-edits
@@ -114,6 +115,8 @@ available yet. The default `overlap: false` skips another run while the first
 agent turn is active; set `overlap: true` only when parallel turns are wanted.
 Jobs run on the local node. Scheduler restarts do not replay missed runs,
 and results remain subject to the instance's bounded, process-local retention.
+Invalid cron expressions fail configuration loading with the job name and file
+path.
 An admission rejection or prompt-file read failure has no invocation ID;
 inspect Quantum job telemetry for that run. Admission rejections also emit
 the server's usual rejection event with `source: :scheduler`. Individual
@@ -209,6 +212,12 @@ Codex drafts findings and Claude verifies them against the same project through
 a managed Pipeline. Both CLIs must be locally authenticated. This example
 returns the final verified response; intermediate stage text is not retained
 by the server result API.
+
+For two independent read-only Codex reviews in parallel, run
+`mix run examples/codex_parallel_review.exs /path/to/project "Review file A" "Review file B"`.
+An Echo coordinator splits the two supplied tasks deterministically; the
+managed Supervisor labels both worker responses and stops the workers after
+completion.
 
 ## Current contract
 

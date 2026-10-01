@@ -99,6 +99,36 @@ defmodule GenAgentServerDispatchTest do
     assert [] = GenAgentServer.Jobs.load!(path, %{"server/default" => ["echo"]})
   end
 
+  test "invalid cron fails config loading with the job name and file path" do
+    directory = Path.join(System.tmp_dir!(), "invalid-cron-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "server.json")
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        jobs: [
+          %{
+            name: "daily-review",
+            instance: "server/default",
+            agent: "echo",
+            schedule: "not-a-cron",
+            prompt: "task"
+          }
+        ]
+      })
+    )
+
+    error =
+      assert_raise ArgumentError, fn ->
+        GenAgentServer.Jobs.load!(path, %{"server/default" => ["echo"]})
+      end
+
+    assert error.message =~ path
+    assert error.message =~ "job daily-review has invalid schedule"
+  end
+
   defp wait_for_id(name) do
     deadline = System.monotonic_time(:millisecond) + 2_000
     poll_id(name, deadline)

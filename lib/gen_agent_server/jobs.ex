@@ -14,7 +14,7 @@ defmodule GenAgentServer.Jobs do
         _ -> raise ArgumentError, "#{path} jobs must be an array"
       end
 
-    jobs = Enum.map(entries, &parse!(&1, Path.dirname(path), instances))
+    jobs = Enum.map(entries, &parse!(&1, path, instances))
     names = Enum.map(jobs, & &1.name)
 
     if length(names) != length(Enum.uniq(names)) do
@@ -27,7 +27,7 @@ defmodule GenAgentServer.Jobs do
   defp parse!(
          %{"name" => name, "instance" => instance, "agent" => agent, "schedule" => schedule} =
            entry,
-         base,
+         path,
          instances
        )
        when is_binary(name) and is_binary(instance) and is_binary(agent) and
@@ -46,7 +46,7 @@ defmodule GenAgentServer.Jobs do
           {:literal, prompt}
 
         {:error, {:ok, file}} when is_binary(file) and file != "" ->
-          file = Path.expand(file, base)
+          file = Path.expand(file, Path.dirname(path))
 
           unless File.regular?(file) do
             raise ArgumentError, "job #{name} prompt_file does not exist: #{file}"
@@ -64,17 +64,26 @@ defmodule GenAgentServer.Jobs do
       raise ArgumentError, "job #{name} overlap must be a boolean"
     end
 
+    parsed_schedule =
+      try do
+        Quantum.Normalizer.normalize_schedule(schedule)
+      rescue
+        error in RuntimeError ->
+          raise ArgumentError,
+                "#{path}: job #{name} has invalid schedule #{inspect(schedule)}: #{Exception.message(error)}"
+      end
+
     %{
       name: name,
       instance: instance,
       agent: agent,
-      schedule: schedule,
+      schedule: parsed_schedule,
       prompt_source: prompt_source,
       overlap: overlap
     }
   end
 
-  defp parse!(_entry, _base, _instances) do
+  defp parse!(_entry, _path, _instances) do
     raise ArgumentError, "each job needs a name, instance, agent, and schedule"
   end
 end

@@ -216,6 +216,22 @@ defmodule GenAgentServerTest do
     end
   end
 
+  test "profile names cannot forge extra CLI instances with control characters" do
+    directory = Path.join(System.tmp_dir!(), "profile-name-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "profiles.json")
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    File.write!(
+      path,
+      Jason.encode!(%{profiles: [%{name: "real\nforged", cwd: ".", providers: ["echo"]}]})
+    )
+
+    assert_raise ArgumentError, ~r/control characters/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+  end
+
   test "profiles require explicit provider-specific write modes" do
     directory = Path.join(System.tmp_dir!(), "modes-#{System.unique_integer([:positive])}")
     File.mkdir_p!(directory)
