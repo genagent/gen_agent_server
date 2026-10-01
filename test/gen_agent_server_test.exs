@@ -55,6 +55,61 @@ defmodule GenAgentServerTest do
     assert {:error, :instance_not_found} = GenAgentServer.result(name, second)
   end
 
+  test "a managed Pipeline uses one external route and retains its result" do
+    name = "test-pipeline-#{System.unique_integer([:positive])}"
+    simple = GenAgentEnsemble.Agents.Simple
+    echo = GenAgentEnsemble.Backends.Echo
+    stages = [{"draft", simple, [backend: echo]}, {"revise", simple, [backend: echo]}]
+
+    assert {:ok, _pid} =
+             GenAgentServer.start_pattern_instance(
+               name,
+               "pipeline",
+               GenAgentEnsemble.Strategies.Pipeline,
+               stages: stages
+             )
+
+    on_exit(fn -> GenAgentServer.stop_instance(name) end)
+
+    assert {:ok, ["pipeline"]} = GenAgentServer.agents(name)
+    assert {:ok, %{routes: ["pipeline"], agents: internal}} = GenAgentServer.status(name)
+    assert Enum.sort(internal) == ["draft", "revise"]
+    assert {:error, {:unknown_agent, "draft"}} = GenAgentServer.invoke(name, "draft", "task")
+
+    assert {:ok, id} = GenAgentServer.CLI.run(["--instance", name, "invoke", "pipeline", "task"])
+    assert {:ok, :completed, %{text: "echo: echo: task"}} = await_result(name, id)
+    assert {:ok, "echo: echo: task"} = GenAgentServer.CLI.run(["--instance", name, "result", id])
+  end
+
+  test "a managed Supervisor fans out and returns through one invocation ID" do
+    name = "test-supervisor-#{System.unique_integer([:positive])}"
+    simple = GenAgentEnsemble.Agents.Simple
+    echo = GenAgentEnsemble.Backends.Echo
+
+    opts = [
+      coordinator: {"coordinator", simple, [backend: echo]},
+      worker_template: {"worker", simple, [backend: echo]},
+      decomposer: fn _text -> ["first", "second"] end
+    ]
+
+    assert {:ok, _pid} =
+             GenAgentServer.start_pattern_instance(
+               name,
+               "review",
+               GenAgentEnsemble.Strategies.Supervisor,
+               opts
+             )
+
+    on_exit(fn -> GenAgentServer.stop_instance(name) end)
+
+    assert {:ok, id} = GenAgentServer.invoke(name, "review", "two parts")
+
+    assert {:ok, :completed, %{text: "echo: first\n\necho: second"}} =
+             await_result(name, id)
+
+    assert {:ok, %{agents: ["coordinator"], routes: ["review"]}} = GenAgentServer.status(name)
+  end
+
   test "in-flight admission is bounded and unknown agents are rejected" do
     name = "test-bounded-#{System.unique_integer([:positive])}"
 

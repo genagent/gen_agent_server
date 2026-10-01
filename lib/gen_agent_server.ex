@@ -2,9 +2,10 @@ defmodule GenAgentServer do
   @moduledoc """
   Local control API for this runnable GenAgent application.
 
-  Each instance owns a Switchboard session and a bounded, non-destructive
+  Each instance owns an Ensemble session and a bounded, non-destructive
   invocation result store. Results survive the submitting caller but not an
-  instance or VM restart. Each configured backend keeps its own session.
+  instance or VM restart. Pattern instances can use another Ensemble strategy
+  with one external route; each configured backend keeps its own session.
   """
 
   def session_name, do: Application.fetch_env!(:gen_agent_server, :session_name)
@@ -24,6 +25,17 @@ defmodule GenAgentServer do
     )
   end
 
+  @doc "Start a managed Ensemble pattern with one external invocation route."
+  def start_pattern_instance(name, route, strategy, strategy_opts, opts \\ [])
+      when is_binary(name) and is_binary(route) and route != "" and is_atom(strategy) and
+             is_list(strategy_opts) and is_list(opts) do
+    start_instance(
+      name,
+      [],
+      Keyword.merge(opts, strategy: strategy, strategy_opts: strategy_opts, routes: [route])
+    )
+  end
+
   def stop_instance(name) when is_binary(name) do
     if name == session_name() do
       {:error, :default_instance}
@@ -36,13 +48,19 @@ defmodule GenAgentServer do
   end
 
   def agents(instance \\ session_name()) do
-    with {:ok, %{agents: names}} <- status(instance), do: {:ok, Enum.sort(names)}
+    GenAgentServer.Invocations.routes(instance)
   end
 
   def status(instance \\ session_name()) do
     case Registry.lookup(GenAgentServer.Registry, {:instance, instance}) do
-      [{_pid, _}] -> GenAgentEnsemble.status(instance)
-      [] -> {:error, :instance_not_found}
+      [{_pid, _}] ->
+        with {:ok, status} <- GenAgentEnsemble.status(instance),
+             {:ok, routes} <- agents(instance) do
+          {:ok, Map.put(status, :routes, routes)}
+        end
+
+      [] ->
+        {:error, :instance_not_found}
     end
   end
 

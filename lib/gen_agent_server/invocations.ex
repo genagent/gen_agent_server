@@ -25,6 +25,8 @@ defmodule GenAgentServer.Invocations do
     call_instance(name, {:invoke, agent, prompt, opts})
   end
 
+  def routes(name), do: call_instance(name, :routes)
+
   @spec result(String.t(), String.t()) :: result()
   def result(name, id), do: call_instance(name, {:result, id})
 
@@ -49,18 +51,23 @@ defmodule GenAgentServer.Invocations do
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
     configured_agents = opts |> Keyword.fetch!(:agents) |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+    routes = Keyword.fetch!(opts, :routes)
+    strategy = Keyword.fetch!(opts, :strategy)
     max_in_flight = Keyword.fetch!(opts, :max_in_flight)
     max_results = Keyword.fetch!(opts, :max_results)
     poll_interval_ms = Keyword.fetch!(opts, :poll_interval_ms)
 
-    if Enum.all?([max_in_flight, max_results, poll_interval_ms], &(is_integer(&1) and &1 > 0)) do
+    if Enum.all?([max_in_flight, max_results, poll_interval_ms], &(is_integer(&1) and &1 > 0)) and
+         routes != [] and Enum.all?(routes, &(is_binary(&1) and &1 != "")) and
+         length(routes) == length(Enum.uniq(routes)) do
       case GenAgentEnsemble.status(name) do
-        {:ok, %{agents: started}} ->
-          if MapSet.new(started) == configured_agents do
+        {:ok, %{agents: started, strategy: ^strategy}} ->
+          if MapSet.size(configured_agents) == 0 or MapSet.new(started) == configured_agents do
             {:ok,
              %{
                name: name,
-               agents: configured_agents,
+               agents: MapSet.new(routes),
+               strategy: strategy,
                pending: %{},
                by_token: %{},
                completed: %{},
@@ -80,6 +87,11 @@ defmodule GenAgentServer.Invocations do
     else
       {:stop, :invalid_invocation_limits}
     end
+  end
+
+  @impl true
+  def handle_call(:routes, _from, state) do
+    {:reply, {:ok, state.agents |> MapSet.to_list() |> Enum.sort()}, state}
   end
 
   @impl true
@@ -121,7 +133,12 @@ defmodule GenAgentServer.Invocations do
         reject(state, agent, source, :busy)
 
       true ->
-        case GenAgentEnsemble.tell(state.name, prompt, Keyword.put(route_opts, :agent, agent)) do
+        ensemble_opts =
+          if state.strategy == GenAgentEnsemble.Strategies.Switchboard,
+            do: Keyword.put(route_opts, :agent, agent),
+            else: route_opts
+
+        case GenAgentEnsemble.tell(state.name, prompt, ensemble_opts) do
           {:ok, token} ->
             id = "inv-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
             started_at_ms = System.monotonic_time(:millisecond)
