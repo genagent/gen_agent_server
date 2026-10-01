@@ -58,9 +58,10 @@ RELEASE_NODE=gen_agent_server_dogfood \
 _build/prod/rel/gen_agent_server/bin/gen_agent_server start
 ```
 
-In another terminal, with the same `RELEASE_NODE`:
+In another terminal, set the same node name before issuing remote commands:
 
 ```sh
+export RELEASE_NODE=gen_agent_server_dogfood
 mix gen_agent_server.remote instances
 mix gen_agent_server.remote --instance home agents
 mix gen_agent_server.remote --instance home invoke codex "Find a small issue worth fixing"
