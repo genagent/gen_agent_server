@@ -37,6 +37,43 @@ and separate provider sessions. `mix gen_agent_server ask PROVIDER PROMPT`
 starts a fresh application for a single request; use IEx for a persistent
 multi-turn session.
 
+## Multiple projects in one server
+
+Set `GEN_AGENT_SERVER_CONFIG` to a JSON file with named project profiles. Each
+profile has its own working directory, backend sessions, and invocation result
+store. Paths in `cwd` are relative to the JSON file; absolute paths also work.
+
+```json
+{
+  "profiles": [
+    {"name": "home", "cwd": "/path/to/home/project", "providers": ["claude", "codex"]},
+    {"name": "work", "cwd": "/path/to/work/project", "providers": ["codex"]}
+  ]
+}
+```
+
+```sh
+GEN_AGENT_SERVER_CONFIG=/path/to/projects.json \
+RELEASE_NODE=gen_agent_server_dogfood \
+_build/prod/rel/gen_agent_server/bin/gen_agent_server start
+```
+
+In another terminal, with the same `RELEASE_NODE`:
+
+```sh
+mix gen_agent_server.remote instances
+mix gen_agent_server.remote --instance home agents
+mix gen_agent_server.remote --instance home invoke codex "Find a small issue worth fixing"
+mix gen_agent_server.remote --instance home result INVOCATION_ID
+```
+
+The default `server/default` instance remains available and uses
+`GEN_AGENT_SERVER_PROVIDERS` and `GEN_AGENT_SERVER_CWD`. Profile names must be
+unique and cannot contain `/`. A missing directory, unknown provider, or
+duplicate name fails startup. Profiles currently use the same read-only
+Claude/Codex settings as the default; use a separate reviewed worktree for
+write-enabled experiments until a scoped write policy is added.
+
 `invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
 `{:ok, :pending}`, `{:ok, :completed, response}`, or
 `{:ok, :failed, reason}`. Completed results can be read repeatedly, including

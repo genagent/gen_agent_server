@@ -45,4 +45,5 @@ agents =
 
 config :gen_agent_server,
   session_name: "server/default",
-  agents: agents
+  agents: agents,
+  profile_file: System.get_env("GEN_AGENT_SERVER_CONFIG")

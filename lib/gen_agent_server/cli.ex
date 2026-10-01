@@ -7,28 +7,38 @@ defmodule GenAgentServer.CLI do
 
   def run(args, source \\ :local_cli)
 
-  def run(["agents"], _source) do
-    with {:ok, names} <- GenAgentServer.agents(), do: {:ok, Enum.join(names, "\n")}
+  def run(["instances"], _source) do
+    {:ok, Enum.join(GenAgentServer.instances(), "\n")}
   end
 
-  def run(["status"], _source) do
-    with {:ok, status} <- GenAgentServer.status(), do: {:ok, inspect(status, pretty: true)}
+  def run(["--instance", instance | args], source) when args != [] do
+    run_instance(instance, args, source)
   end
 
-  def run(["ask", agent | words], source) when words != [] do
-    with {:ok, response} <- GenAgentServer.ask(agent, Enum.join(words, " "), source: source) do
+  def run(args, source), do: run_instance(GenAgentServer.session_name(), args, source)
+
+  defp run_instance(instance, ["agents"], _source) do
+    with {:ok, names} <- GenAgentServer.agents(instance), do: {:ok, Enum.join(names, "\n")}
+  end
+
+  defp run_instance(instance, ["status"], _source) do
+    with {:ok, status} <- GenAgentServer.status(instance),
+         do: {:ok, inspect(status, pretty: true)}
+  end
+
+  defp run_instance(instance, ["ask", agent | words], source) when words != [] do
+    with {:ok, response} <-
+           GenAgentServer.ask_instance(instance, agent, Enum.join(words, " "), source: source) do
       {:ok, response.text}
     end
   end
 
-  def run(["invoke", agent | words], source) when words != [] do
-    GenAgentServer.invoke(GenAgentServer.session_name(), agent, Enum.join(words, " "),
-      source: source
-    )
+  defp run_instance(instance, ["invoke", agent | words], source) when words != [] do
+    GenAgentServer.invoke(instance, agent, Enum.join(words, " "), source: source)
   end
 
-  def run(["result", id], _source) do
-    case GenAgentServer.result(id) do
+  defp run_instance(instance, ["result", id], _source) do
+    case GenAgentServer.result(instance, id) do
       {:ok, :pending} -> {:ok, "pending"}
       {:ok, :completed, response} -> {:ok, response.text}
       {:ok, :failed, reason} -> {:error, reason}
@@ -36,7 +46,7 @@ defmodule GenAgentServer.CLI do
     end
   end
 
-  def run(_args, _source), do: {:error, :usage}
+  defp run_instance(_instance, _args, _source), do: {:error, :usage}
 
   def main(args, source \\ :local_cli) do
     case run(args, source) do
@@ -46,7 +56,7 @@ defmodule GenAgentServer.CLI do
 
       {:error, :usage} ->
         raise ArgumentError,
-              "usage: gen_agent_server agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+              "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
 
       {:error, reason} ->
         raise RuntimeError, "GenAgent request failed: #{inspect(reason)}"

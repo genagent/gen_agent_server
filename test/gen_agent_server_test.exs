@@ -109,6 +109,7 @@ defmodule GenAgentServerTest do
   end
 
   test "CLI lists agents and routes an ask" do
+    assert {:ok, "server/default"} = GenAgentServer.CLI.run(["instances"])
     assert capture_io(fn -> assert :ok = GenAgentServer.CLI.main(["agents"]) end) == "echo\n"
 
     assert capture_io(fn -> assert :ok = GenAgentServer.CLI.main(["ask", "echo", "hello"]) end) ==
@@ -119,6 +120,46 @@ defmodule GenAgentServerTest do
     assert {:ok, "echo: from CLI"} = GenAgentServer.CLI.run(["result", id])
   end
 
+  test "named profiles route CLI invocations and results independently" do
+    name = "project-#{System.unique_integer([:positive])}"
+    directory = Path.join(System.tmp_dir!(), name)
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "profiles.json")
+    File.write!(path, Jason.encode!(%{profiles: [%{name: name, cwd: ".", providers: ["echo"]}]}))
+
+    on_exit(fn -> File.rm_rf!(directory) end)
+    assert [{^name, agents}] = GenAgentServer.Profiles.load!(path)
+    assert {:ok, _pid} = GenAgentServer.start_instance(name, agents)
+    on_exit(fn -> GenAgentServer.stop_instance(name) end)
+
+    assert name in GenAgentServer.instances()
+    assert {:ok, "echo"} = GenAgentServer.CLI.run(["--instance", name, "agents"])
+    assert {:ok, id} = GenAgentServer.CLI.run(["--instance", name, "invoke", "echo", "task"])
+    assert {:ok, :completed, %{text: "echo: task"}} = await_result(name, id)
+    assert {:ok, "echo: task"} = GenAgentServer.CLI.run(["--instance", name, "result", id])
+    assert {:error, :not_found} = GenAgentServer.CLI.run(["result", id])
+  end
+
+  test "profile files reject duplicate names and missing project directories" do
+    directory = Path.join(System.tmp_dir!(), "profiles-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "profiles.json")
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    profile = %{name: "same", cwd: ".", providers: ["echo"]}
+    File.write!(path, Jason.encode!(%{profiles: [profile, profile]}))
+
+    assert_raise ArgumentError, ~r/duplicate profile names/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+
+    File.write!(path, Jason.encode!(%{profiles: [%{profile | cwd: "missing"}]}))
+
+    assert_raise ArgumentError, ~r/cwd is not a directory/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+  end
+
   test "one-shot Mix task rejects result commands that need a persistent release" do
     assert_raise Mix.Error, ~r/require a running server/, fn ->
       Mix.Tasks.GenAgentServer.run(["invoke", "echo", "hello"])
@@ -126,6 +167,10 @@ defmodule GenAgentServerTest do
 
     assert_raise Mix.Error, ~r/require a running server/, fn ->
       Mix.Tasks.GenAgentServer.run(["result", "inv-1"])
+    end
+
+    assert_raise Mix.Error, ~r/require a running server/, fn ->
+      Mix.Tasks.GenAgentServer.run(["--instance", "project", "result", "inv-1"])
     end
   end
 
