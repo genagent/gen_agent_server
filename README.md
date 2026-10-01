@@ -203,6 +203,13 @@ patterns, run `mix run examples/ensemble_patterns.exs`. The example checks
 stage handoff, two-worker fan-out, result IDs, and worker cleanup inside the
 same OTP application.
 
+For a real read-only review, run
+`mix run examples/claude_codex_review.exs /path/to/project "Review the remote command handling"`.
+Codex drafts findings and Claude verifies them against the same project through
+a managed Pipeline. Both CLIs must be locally authenticated. This example
+returns the final verified response; intermediate stage text is not retained
+by the server result API.
+
 ## Current contract
 
 The default instance and any additional instances each own a named Ensemble
