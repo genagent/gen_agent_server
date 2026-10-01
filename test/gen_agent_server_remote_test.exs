@@ -24,6 +24,7 @@ defmodule GenAgentServer.RemoteTest do
 
     try do
       assert {:error, :timeout} = Remote.run(release, ["status"])
+      assert {"ready\n", 0} = Remote.run(release, ["ask", "codex", "prompt"])
 
       assert {"ready\n", 0} =
                Remote.run(release, ["--instance", "work", "ask", "codex", "prompt"])
@@ -47,21 +48,54 @@ defmodule GenAgentServer.RemoteTest do
     assert eventually(fn -> not running?(child_pid) end)
   end
 
+  test "timeout escalates for a child that ignores TERM", %{dir: dir} do
+    child_file = Path.join(dir, "term-resistant.pid")
+
+    release =
+      script(dir, "term-resistant", "trap '' TERM\nsleep 60 &\necho $! > #{child_file}\nwait")
+
+    assert {:error, :timeout} = Remote.run(release, ["status"], timeout_ms: 200)
+    child_pid = child_file |> File.read!() |> String.trim() |> String.to_integer()
+    assert eventually(fn -> not running?(child_pid) end)
+  end
+
   test "the remote task reports an actionable timeout", %{dir: dir} do
     release = script(dir, "stalled", "sleep 60")
     old_release = System.get_env("GEN_AGENT_SERVER_RELEASE_BIN")
     old_timeout = System.get_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS")
+    old_ask_timeout = System.get_env("GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS")
     System.put_env("GEN_AGENT_SERVER_RELEASE_BIN", release)
     System.put_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", "30")
+    System.put_env("GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS", "30")
 
     try do
-      assert_raise Mix.Error, ~r/server RPC timed out; use invoke followed by result/, fn ->
+      assert_raise Mix.Error, ~r/server RPC timed out; check release connectivity and logs/, fn ->
         Mix.Tasks.GenAgentServer.Remote.run(["status"])
+      end
+
+      assert_raise Mix.Error, ~r/server ask RPC timed out; use invoke followed by result/, fn ->
+        Mix.Tasks.GenAgentServer.Remote.run(["ask", "codex", "prompt"])
+      end
+
+      assert_raise Mix.Error, ~r/server invoke RPC timed out before an ID was returned/, fn ->
+        Mix.Tasks.GenAgentServer.Remote.run(["invoke", "codex", "prompt"])
       end
     after
       restore_env("GEN_AGENT_SERVER_RELEASE_BIN", old_release)
       restore_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", old_timeout)
+      restore_env("GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS", old_ask_timeout)
     end
+  end
+
+  test "invalid explicit timeout does not spawn the release", %{dir: dir} do
+    marker = Path.join(dir, "spawned")
+    release = script(dir, "marker", "touch #{marker}\nsleep 60")
+
+    assert_raise ArgumentError, ~r/timeout_ms must be a positive integer/, fn ->
+      Remote.run(release, ["status"], timeout_ms: nil)
+    end
+
+    refute File.exists?(marker)
   end
 
   defp script(dir, name, body) do
@@ -72,9 +106,10 @@ defmodule GenAgentServer.RemoteTest do
   end
 
   defp running?(pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)]) do
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
       {status, 0} -> not String.starts_with?(String.trim(status), "Z")
-      _ -> false
+      {"", _} -> false
+      {error, _} -> raise "could not inspect child process: #{error}"
     end
   end
 

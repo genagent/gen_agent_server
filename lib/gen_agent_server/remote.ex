@@ -12,7 +12,7 @@ defmodule GenAgentServer.Remote do
 
   @doc false
   def run(release_bin, args, opts \\ []) when is_binary(release_bin) and is_list(args) do
-    timeout_ms = Keyword.get(opts, :timeout_ms, timeout_for(args))
+    timeout_ms = opts |> Keyword.get(:timeout_ms, timeout_for(args)) |> validate_timeout!()
 
     port =
       Port.open({:spawn_executable, release_bin}, [
@@ -22,9 +22,20 @@ defmodule GenAgentServer.Remote do
         args: ["rpc", expression(args)]
       ])
 
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, pid} -> pid
+        nil -> nil
+      end
+
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    collect(port, deadline, [])
+    collect(port, os_pid, deadline, [])
   end
+
+  defp validate_timeout!(value) when is_integer(value) and value > 0, do: value
+
+  defp validate_timeout!(_value),
+    do: raise(ArgumentError, "timeout_ms must be a positive integer")
 
   defp timeout_for(["--instance", _instance, "ask" | _]), do: ask_timeout()
   defp timeout_for(["ask" | _]), do: ask_timeout()
@@ -46,32 +57,28 @@ defmodule GenAgentServer.Remote do
     end
   end
 
-  defp collect(port, deadline, output) do
+  defp collect(port, os_pid, deadline, output) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
       {^port, {:data, data}} ->
-        collect(port, deadline, [data | output])
+        collect(port, os_pid, deadline, [data | output])
 
       {^port, {:exit_status, status}} ->
         {output |> Enum.reverse() |> IO.iodata_to_binary(), status}
     after
       remaining ->
-        stop_process_tree(port)
+        stop_process_tree(port, os_pid)
         {:error, :timeout}
     end
   end
 
-  defp stop_process_tree(port) do
-    case Port.info(port, :os_pid) do
-      {:os_pid, pid} ->
-        pids = process_tree(pid)
-        Enum.each(pids, &signal(&1, "-TERM"))
-        Process.sleep(100)
-        Enum.each(pids, &signal(&1, "-KILL"))
-
-      nil ->
-        :ok
+  defp stop_process_tree(port, os_pid) do
+    if is_integer(os_pid) and Port.info(port) do
+      pids = process_tree(os_pid)
+      Enum.each(pids, &signal_if_same(&1, "-TERM"))
+      Process.sleep(100)
+      Enum.each(pids, &signal_if_same(&1, "-KILL"))
     end
 
     try do
@@ -79,42 +86,71 @@ defmodule GenAgentServer.Remote do
     rescue
       ArgumentError -> :ok
     end
+
+    drain_port_messages(port)
   end
 
   defp process_tree(root) do
-    case System.cmd("ps", ["-eo", "pid=,ppid="], stderr_to_stdout: true) do
+    case System.cmd("ps", ["-eo", "pid=,ppid=,lstart="], stderr_to_stdout: true) do
       {listing, 0} ->
-        children =
-          listing
-          |> String.split("\n", trim: true)
-          |> Enum.reduce(%{}, fn line, acc ->
-            case String.split(line) do
-              [pid, parent] ->
-                Map.update(
-                  acc,
-                  String.to_integer(parent),
-                  [String.to_integer(pid)],
-                  &[String.to_integer(pid) | &1]
-                )
+        processes = parse_processes(listing)
 
-              _ ->
-                acc
-            end
-          end)
-
-        descendants(root, children) ++ [root]
+        if Map.has_key?(processes, root),
+          do: descendants(root, processes) ++ [{root, elem(processes[root], 1)}],
+          else: []
 
       _ ->
-        [root]
+        []
     end
   end
 
-  defp descendants(parent, children) do
-    Enum.flat_map(Map.get(children, parent, []), fn pid -> descendants(pid, children) ++ [pid] end)
+  defp parse_processes(listing) do
+    listing
+    |> String.split("\n", trim: true)
+    |> Enum.reduce(%{}, fn line, acc ->
+      case String.split(line) do
+        [pid, parent | started] when started != [] ->
+          Map.put(
+            acc,
+            String.to_integer(pid),
+            {String.to_integer(parent), Enum.join(started, " ")}
+          )
+
+        _ ->
+          acc
+      end
+    end)
   end
 
-  defp signal(pid, kind) do
-    _ = System.cmd("kill", [kind, Integer.to_string(pid)], stderr_to_stdout: true)
+  defp descendants(parent, processes) do
+    processes
+    |> Enum.filter(fn {_pid, {ppid, _identity}} -> ppid == parent end)
+    |> Enum.flat_map(fn {pid, {_ppid, identity}} ->
+      descendants(pid, processes) ++ [{pid, identity}]
+    end)
+  end
+
+  defp signal_if_same({pid, identity}, kind) do
+    if process_identity(pid) == identity do
+      _ = System.cmd("kill", [kind, Integer.to_string(pid)], stderr_to_stdout: true)
+    end
+
     :ok
+  end
+
+  defp process_identity(pid) do
+    case System.cmd("ps", ["-o", "lstart=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+      {started, 0} -> started |> String.split() |> Enum.join(" ")
+      _ -> nil
+    end
+  end
+
+  defp drain_port_messages(port) do
+    receive do
+      {^port, {:data, _data}} -> drain_port_messages(port)
+      {^port, {:exit_status, _status}} -> :ok
+    after
+      100 -> :ok
+    end
   end
 end
