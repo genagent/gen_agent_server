@@ -83,6 +83,22 @@ defmodule GenAgentServerDispatchTest do
     end
   end
 
+  test "a present jobs field must be an array" do
+    directory = Path.join(System.tmp_dir!(), "invalid-jobs-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "server.json")
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    File.write!(path, ~s({"jobs":42}))
+
+    assert_raise ArgumentError, ~r/jobs must be an array/, fn ->
+      GenAgentServer.Jobs.load!(path, %{"server/default" => ["echo"]})
+    end
+
+    File.write!(path, ~s({"profiles":[]}))
+    assert [] = GenAgentServer.Jobs.load!(path, %{"server/default" => ["echo"]})
+  end
+
   defp wait_for_id(name) do
     deadline = System.monotonic_time(:millisecond) + 2_000
     poll_id(name, deadline)
