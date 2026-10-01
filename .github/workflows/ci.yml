@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - run: mix format --check-formatted
+      - run: mix test
+      - run: mix gen_agent_server ask echo "ci"
+      - run: MIX_ENV=prod mix release
+      - run: |
+          _build/prod/rel/gen_agent_server/bin/gen_agent_server eval \
+            'Application.ensure_all_started(:gen_agent_server); case GenAgentServer.ask("echo", "release") do {:ok, %{text: "echo: release"}} -> :ok; other -> raise inspect(other) end'
