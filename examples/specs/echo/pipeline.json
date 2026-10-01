@@ -1,0 +1,1 @@
+{"pattern": "pipeline", "stages": [{"name": "draft", "provider": "echo"}, {"name": "revise", "provider": "echo"}]}

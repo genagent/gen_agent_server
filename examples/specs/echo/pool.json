@@ -1,0 +1,1 @@
+{"pattern": "pool", "worker_count": 2, "worker": {"provider": "echo"}}
