@@ -30,8 +30,16 @@ defmodule GenAgentServer.Invocations do
 
   defp call_instance(name, request) do
     case Registry.lookup(GenAgentServer.Registry, {:invocations, name}) do
-      [{pid, _}] -> GenServer.call(pid, request)
-      [] -> {:error, :instance_not_found}
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, request)
+        catch
+          :exit, reason ->
+            if Process.alive?(pid), do: exit(reason), else: {:error, :instance_not_found}
+        end
+
+      [] ->
+        {:error, :instance_not_found}
     end
   end
 
