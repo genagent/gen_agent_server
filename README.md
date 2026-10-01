@@ -68,6 +68,13 @@ mix gen_agent_server.remote --instance home invoke codex "Find a small issue wor
 mix gen_agent_server.remote --instance home result INVOCATION_ID
 ```
 
+Remote control and read commands have a 30-second RPC wait limit; synchronous
+`ask` has a one-hour limit. Set `GEN_AGENT_SERVER_RPC_TIMEOUT_MS` and
+`GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS` to positive millisecond values to change
+them. A timed-out RPC process is terminated. For work that may outlast a
+synchronous `ask`, use `invoke` and check `result` later; the invocation keeps
+running in the server after the short `invoke` RPC returns its ID.
+
 The default `server/default` instance remains available and uses
 `GEN_AGENT_SERVER_PROVIDERS` and `GEN_AGENT_SERVER_CWD`. Profile names must be
 unique and cannot contain `/` or control characters. A missing directory,
