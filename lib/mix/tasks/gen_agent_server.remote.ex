@@ -6,7 +6,9 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
   @impl true
   def run(args) do
     if args == [] do
-      Mix.raise("usage: mix gen_agent_server.remote agents | status | ask PROVIDER PROMPT")
+      Mix.raise(
+        "usage: mix gen_agent_server.remote agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+      )
     end
 
     release_bin =

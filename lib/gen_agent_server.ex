@@ -2,21 +2,101 @@ defmodule GenAgentServer do
   @moduledoc """
   Local control API for this runnable GenAgent application.
 
-  The application owns one volatile Switchboard session. Each configured
-  backend has a separate provider session. A process or VM restart loses
-  in-memory turns, results, and session state.
+  Each instance owns a Switchboard session and a bounded, non-destructive
+  invocation result store. Results survive the submitting caller but not an
+  instance or VM restart. Each configured backend keeps its own session.
   """
 
   def session_name, do: Application.fetch_env!(:gen_agent_server, :session_name)
 
-  def agents do
-    with {:ok, %{agents: names}} <- status(), do: {:ok, Enum.sort(names)}
+  def start_instance(name, agents, opts \\ [])
+      when is_binary(name) and is_list(agents) and is_list(opts) do
+    DynamicSupervisor.start_child(
+      GenAgentServer.InstanceSupervisor,
+      {GenAgentServer.Instance, Keyword.merge(opts, name: name, agents: agents)}
+    )
   end
 
-  def status, do: GenAgentEnsemble.status(session_name())
+  def stop_instance(name) when is_binary(name) do
+    if name == session_name() do
+      {:error, :default_instance}
+    else
+      case Registry.lookup(GenAgentServer.Registry, {:instance, name}) do
+        [{pid, _}] -> DynamicSupervisor.terminate_child(GenAgentServer.InstanceSupervisor, pid)
+        [] -> {:error, :not_found}
+      end
+    end
+  end
+
+  def agents(instance \\ session_name()) do
+    with {:ok, %{agents: names}} <- status(instance), do: {:ok, Enum.sort(names)}
+  end
+
+  def status(instance \\ session_name()) do
+    case Registry.lookup(GenAgentServer.Registry, {:instance, instance}) do
+      [{_pid, _}] -> GenAgentEnsemble.status(instance)
+      [] -> {:error, :instance_not_found}
+    end
+  end
+
+  def invoke(agent, prompt) when is_binary(agent) and is_binary(prompt) do
+    invoke(session_name(), agent, prompt, [])
+  end
+
+  def invoke(instance, agent, prompt)
+      when is_binary(instance) and is_binary(agent) and is_binary(prompt) do
+    invoke(instance, agent, prompt, [])
+  end
+
+  def invoke(instance, agent, prompt, opts)
+      when is_binary(instance) and is_binary(agent) and is_binary(prompt) and is_list(opts) do
+    GenAgentServer.Invocations.invoke(instance, agent, prompt, opts)
+  end
+
+  def result(id) when is_binary(id), do: result(session_name(), id)
+
+  def result(instance, id) when is_binary(instance) and is_binary(id) do
+    GenAgentServer.Invocations.result(instance, id)
+  end
 
   def ask(agent, prompt, opts \\ []) when is_binary(agent) and is_binary(prompt) do
-    opts = opts |> Keyword.put_new(:timeout, :infinity) |> Keyword.put(:agent, agent)
-    GenAgentEnsemble.ask(session_name(), prompt, opts)
+    {timeout, route_opts} = Keyword.pop(opts, :timeout, :infinity)
+
+    with {:ok, id} <- invoke(session_name(), agent, prompt, route_opts) do
+      await_result(session_name(), id, timeout)
+    end
+  end
+
+  defp await_result(instance, id, timeout) do
+    deadline =
+      case timeout do
+        :infinity -> :infinity
+        ms when is_integer(ms) and ms >= 0 -> System.monotonic_time(:millisecond) + ms
+      end
+
+    await_until(instance, id, deadline)
+  end
+
+  defp await_until(instance, id, deadline) do
+    case result(instance, id) do
+      {:ok, :pending} ->
+        now = System.monotonic_time(:millisecond)
+
+        if deadline != :infinity and now >= deadline do
+          {:error, :timeout}
+        else
+          Process.sleep(if(deadline == :infinity, do: 25, else: min(25, deadline - now)))
+          await_until(instance, id, deadline)
+        end
+
+      {:ok, :completed, response} ->
+        {:ok, response}
+
+      {:ok, :failed, reason} ->
+        {:error, reason}
+
+      error ->
+        error
+    end
   end
 end

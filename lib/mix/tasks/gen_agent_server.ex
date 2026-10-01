@@ -5,6 +5,10 @@ defmodule Mix.Tasks.GenAgentServer do
 
   @impl true
   def run(args) do
+    if match?([command | _] when command in ["invoke", "result"], args) do
+      Mix.raise("invoke/result require a running server; use mix gen_agent_server.remote")
+    end
+
     Mix.Task.run("app.start")
 
     case GenAgentServer.CLI.run(args) do

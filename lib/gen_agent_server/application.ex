@@ -8,14 +8,17 @@ defmodule GenAgentServer.Application do
     agents = Application.fetch_env!(:gen_agent_server, :agents)
 
     children = [
-      {GenAgentEnsemble.Server,
-       name: session_name,
-       strategy: GenAgentEnsemble.Strategies.Switchboard,
-       opts: [agents: agents]}
+      {Registry, keys: :unique, name: GenAgentServer.Registry},
+      {DynamicSupervisor, strategy: :one_for_one, name: GenAgentServer.InstanceSupervisor},
+      Supervisor.child_spec(
+        {GenAgentServer.Instance, name: session_name, agents: agents},
+        id: :default_instance,
+        restart: :permanent
+      )
     ]
 
     Supervisor.start_link(children,
-      strategy: :one_for_one,
+      strategy: :rest_for_one,
       max_restarts: 0,
       name: GenAgentServer.Supervisor
     )
