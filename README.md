@@ -110,7 +110,9 @@ Jobs run on the local node. Scheduler restarts do not replay missed runs,
 and results remain subject to the instance's bounded, process-local retention.
 An admission rejection or prompt-file read failure has no invocation ID;
 inspect Quantum job telemetry for that run. Admission rejections also emit
-the server's usual rejection event with `source: :scheduler`.
+the server's usual rejection event with `source: :scheduler`. Individual
+scheduled turns cannot yet be cancelled; GenAgent's turn watchdog bounds
+active work. Start with read-only jobs and review their results.
 
 `invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
 `{:ok, :pending}`, `{:ok, :completed, response}`, or
@@ -178,9 +180,9 @@ An `ask` timeout or caller exit does not establish that an underlying provider
 process stopped; GenAgent's turn watchdog bounds active work. There is no
 durable admission, automatic retry, or cross-node result store yet.
 
-The app now has repeatable result reads for multiple clients. The next slice
-should define explicit cancellation before exposing this API over MCP or
-enabling unattended scheduling.
+The app now has repeatable result reads for multiple clients. Individual
+turn cancellation remains to be defined in Ensemble before this API is
+exposed over MCP or used for broader unattended orchestration.
 
 ## Telemetry
 
