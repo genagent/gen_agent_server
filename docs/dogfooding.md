@@ -32,6 +32,7 @@ permission or to establish that a subprocess stopped.
 | 7 | Quantum `run_job/1` submitted a delayed Echo turn through the server's invocation API. | The job exposed an ID while active, a second run was rejected for overlap, and the completed Echo result was retrievable by that ID. | Mechanical integration check for opt-in scheduling; no Oban process or database was involved. |
 | 8 | A built OTP release loaded an `echo-check` job and a named `review` profile. Separate remote commands listed the job, queued one run, found `inv-4`, and read its Echo result from `review`. | The scheduler and profile routing worked across commands in a live release. | Mechanical release smoke test; the cron timer itself was not awaited. |
 | 9 | Codex used an explicit workspace-write profile in a disposable Git repository to append one line to `notes.txt`. | The result was retained and the file changed exactly as requested; `git status` showed no other changes. The displayed response concatenated Codex's progress text and final answer without a separator. | Write-path mechanics passed. The response presentation needs a separate look before treating it as an agent-behavior problem. |
+| 10 | Echo ran a two-stage Pipeline and a two-worker Supervisor fan-out from the same OTP application. | Pipeline passed its first response into stage two. Supervisor returned both worker outputs and cleaned up the workers. | Deterministic pattern check, now reproducible with `mix run examples/ensemble_patterns.exs`; server invocation IDs do not yet wrap these sessions. |
 
 The Codex CLI inherited local MCP configuration and logged connection warnings
 for unavailable servers during these runs, though the turn completed. Track
@@ -45,11 +46,10 @@ exhausted; no Claude behavior conclusion follows from that attempt.
    after Claude usage resets. Compare claims against files and tests; record
    disagreement or missing evidence as behavioral findings only after checking
    each provider's delivered instructions and tool access.
-2. Exercise Ensemble's Pipeline with deterministic backends first, then a
-   read-only critique/revision task. Specify what each stage receives and how
-   stage failure stops the run before asking a model to do the task.
-3. Exercise Supervisor fan-out on independent, read-only files. Bound worker
-   count and verify partial failure, late replies, and result attribution.
+2. Try a read-only critique/revision task with Pipeline. Specify what each
+   stage receives and how stage failure stops the run before asking a model.
+3. Try Supervisor fan-out on independent, read-only files. Bound worker count
+   and verify partial failure, late replies, and result attribution.
 4. Only then try a write task in an isolated worktree, with a human-reviewed
    plan and ordinary test/PR validation. Keep server admission and result
    semantics explicit before adding multiple clients, MCP, or Oban.
