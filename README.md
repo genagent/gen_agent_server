@@ -146,6 +146,28 @@ Each `agents` entry has the same `{name, callback_module, backend_options}`
 shape as `config/runtime.exs`. Result IDs are meaningful only within their
 instance. All results and provider sessions remain process-local and volatile.
 
+Pattern instances use one external route while Ensemble owns their internal
+stages or workers. For example, a Pipeline can use the same invocation IDs
+and result store as a Switchboard instance:
+
+```elixir
+{:ok, _pid} = GenAgentServer.start_pattern_instance(
+  "review-pipeline", "review", GenAgentEnsemble.Strategies.Pipeline,
+  stages: [
+    {"draft", GenAgentEnsemble.Agents.Simple, backend: GenAgentEnsemble.Backends.Echo},
+    {"revise", GenAgentEnsemble.Agents.Simple, backend: GenAgentEnsemble.Backends.Echo}
+  ]
+)
+{:ok, id} = GenAgentServer.invoke("review-pipeline", "review", "a short note")
+GenAgentServer.result("review-pipeline", id)
+```
+
+`agents("review-pipeline")` lists the external `review` route, while
+`status("review-pipeline")` shows both that route and Ensemble's internal
+agents. The instance is created at runtime and disappears on restart; an
+embedding application can start it again during its own startup. The JSON
+profile format currently creates Switchboard instances only.
+
 To start an OTP release:
 
 ```sh
@@ -176,11 +198,10 @@ A network API, MCP adapter, and dashboard are follow-on layers.
 The [dogfooding log](docs/dogfooding.md) records bounded real tasks, observed
 issues, and the planned progression through Ensemble patterns.
 
-For a local, model-free look at Ensemble's Pipeline and Supervisor patterns,
-run `mix run examples/ensemble_patterns.exs`. The example checks stage
-handoff, two-worker fan-out, and worker cleanup inside the same OTP
-application. It uses Ensemble directly; server-managed pattern invocations
-and result IDs are a separate integration step.
+For a local, model-free look at server-managed Pipeline and Supervisor
+patterns, run `mix run examples/ensemble_patterns.exs`. The example checks
+stage handoff, two-worker fan-out, result IDs, and worker cleanup inside the
+same OTP application.
 
 ## Current contract
 
