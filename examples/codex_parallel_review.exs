@@ -1,17 +1,18 @@
-# Run with: mix run examples/codex_parallel_review.exs PROJECT_DIR "Task one" "Task two"
-# Echo deterministically splits two independent tasks. Two read-only Codex
+# Run with: mix run examples/codex_parallel_review.exs PROJECT_DIR "Task one" "Task two" ["Task three" ["Task four"]]
+# Echo deterministically splits two to four independent tasks. Read-only Codex
 # workers run under a managed Supervisor and stop after their replies.
 
-{cwd, first_task, second_task} =
+{cwd, review_tasks} =
   case System.argv() do
-    [cwd, first, second] when first != "" and second != "" ->
-      {Path.expand(cwd), first, second}
+    [cwd, first, second | rest] when length(rest) <= 2 ->
+      {Path.expand(cwd), [first, second | rest]}
 
     _ ->
-      raise "usage: mix run examples/codex_parallel_review.exs PROJECT_DIR \"Task one\" \"Task two\""
+      raise "usage: mix run examples/codex_parallel_review.exs PROJECT_DIR \"Task one\" \"Task two\" [\"Task three\" [\"Task four\"]]"
   end
 
 unless File.dir?(cwd), do: raise("project directory does not exist: #{cwd}")
+unless Enum.all?(review_tasks, &(&1 != "")), do: raise("review tasks must not be empty")
 
 name = "parallel-review-#{System.unique_integer([:positive])}"
 simple = GenAgentEnsemble.Agents.Simple
@@ -41,7 +42,7 @@ end
 
 try do
   tasks =
-    [first_task, second_task]
+    review_tasks
     |> Enum.map(&"#{&1}\n\nCite source locations. Do not edit files.")
     |> Jason.encode!()
 

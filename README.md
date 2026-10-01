@@ -221,11 +221,11 @@ a managed Pipeline. Both CLIs must be locally authenticated. This example
 returns the final verified response; intermediate stage text is not retained
 by the server result API.
 
-For two independent read-only Codex reviews in parallel, run
+For two to four independent read-only Codex reviews in parallel, run
 `mix run examples/codex_parallel_review.exs /path/to/project "Review file A" "Review file B"`.
-An Echo coordinator splits the two supplied tasks deterministically; the
-managed Supervisor labels both worker responses and stops the workers after
-completion.
+Pass a third or fourth task in the same form when needed. An Echo coordinator
+splits the supplied tasks deterministically; the managed Supervisor labels
+each worker response and stops the workers after completion.
 
 ## Current contract
 
