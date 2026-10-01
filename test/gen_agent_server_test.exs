@@ -161,6 +161,38 @@ defmodule GenAgentServerTest do
     end
   end
 
+  test "profiles require explicit provider-specific write modes" do
+    directory = Path.join(System.tmp_dir!(), "modes-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "profiles.json")
+    on_exit(fn -> File.rm_rf!(directory) end)
+
+    profile = %{
+      name: "editing",
+      cwd: ".",
+      providers: ["claude", "codex"],
+      claude_permission_mode: "accept_edits",
+      codex_sandbox: "workspace_write"
+    }
+
+    File.write!(path, Jason.encode!(%{profiles: [profile]}))
+    assert [{"editing", agents}] = GenAgentServer.Profiles.load!(path)
+    assert {"claude", _, claude_opts} = Enum.find(agents, &(elem(&1, 0) == "claude"))
+    assert {"codex", _, codex_opts} = Enum.find(agents, &(elem(&1, 0) == "codex"))
+    assert claude_opts[:permission_mode] == :accept_edits
+    assert codex_opts[:sandbox] == :workspace_write
+    assert codex_opts[:approval_policy] == :never
+
+    File.write!(
+      path,
+      Jason.encode!(%{profiles: [%{profile | codex_sandbox: "danger_full_access"}]})
+    )
+
+    assert_raise ArgumentError, ~r/invalid codex_sandbox/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+  end
+
   test "one-shot Mix task rejects result commands that need a persistent release" do
     assert_raise Mix.Error, ~r/require a running server/, fn ->
       Mix.Tasks.GenAgentServer.run(["invoke", "echo", "hello"])
