@@ -27,8 +27,16 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
       end
 
     case result do
-      {output, 0} -> IO.write(output)
-      {output, _status} -> Mix.raise("server RPC failed: #{String.trim(output)}")
+      {output, 0} ->
+        IO.write(output)
+
+      {:error, :timeout} ->
+        Mix.raise(
+          "server RPC timed out; use invoke followed by result for long work, or increase GEN_AGENT_SERVER_RPC_TIMEOUT_MS / GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS"
+        )
+
+      {output, _status} ->
+        Mix.raise("server RPC failed: #{String.trim(output)}")
     end
   end
 end
