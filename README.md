@@ -55,6 +55,7 @@ specs and result stores:
   max_in_flight: 4, max_results: 50)
 {:ok, id} = GenAgentServer.invoke("review", "codex", "Review this module")
 GenAgentServer.result("review", id)
+GenAgentServer.ask_instance("review", "codex", "Summarize the finding")
 GenAgentServer.stop_instance("review")
 ```
 
@@ -103,5 +104,21 @@ process stopped; GenAgent's turn watchdog bounds active work. There is no
 durable admission, automatic retry, or cross-node result store yet.
 
 The app now has repeatable result reads for multiple clients. The next slice
-should add invocation lifecycle telemetry and explicit cancellation before
-exposing this API over MCP or enabling unattended scheduling.
+should define explicit cancellation before exposing this API over MCP or
+enabling unattended scheduling.
+
+## Telemetry
+
+The server emits `[:gen_agent_server, :invocation, :start | :stop | :error]`
+for admitted turns, `[:gen_agent_server, :admission, :rejected]` for requests
+that never received an ID, and `[:gen_agent_server, :wait, :timeout]` when a
+synchronous caller stops waiting for a turn that may still be running.
+Terminal invocation events have `duration_ms`; start and rejection events
+have `system_time` in the VM native unit. The module
+`GenAgentServer.Telemetry` documents the metadata contract.
+
+Invocation events carry `instance`, `agent`, `invocation_id`,
+`ensemble_token`, and `source` (`:api`, `:local_cli`, `:remote_cli`,
+`:scheduler`, or `:mcp`). They never contain prompts, responses, provider
+state, or raw errors. Use IDs and names to correlate a trace, not as metric
+labels. Repeated `result` reads do not emit another terminal event.

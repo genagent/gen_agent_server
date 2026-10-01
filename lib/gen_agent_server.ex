@@ -60,10 +60,32 @@ defmodule GenAgentServer do
   end
 
   def ask(agent, prompt, opts \\ []) when is_binary(agent) and is_binary(prompt) do
-    {timeout, route_opts} = Keyword.pop(opts, :timeout, :infinity)
+    ask_instance(session_name(), agent, prompt, opts)
+  end
 
-    with {:ok, id} <- invoke(session_name(), agent, prompt, route_opts) do
-      await_result(session_name(), id, timeout)
+  def ask_instance(instance, agent, prompt, opts \\ [])
+      when is_binary(instance) and is_binary(agent) and is_binary(prompt) and is_list(opts) do
+    {timeout, route_opts} = Keyword.pop(opts, :timeout, :infinity)
+    source = Keyword.get(route_opts, :source, :api)
+
+    with {:ok, id} <- invoke(instance, agent, prompt, route_opts) do
+      started_at_ms = System.monotonic_time(:millisecond)
+
+      case await_result(instance, id, timeout) do
+        {:error, :timeout} = error ->
+          GenAgentServer.Telemetry.wait_timeout(
+            instance,
+            agent,
+            id,
+            source,
+            started_at_ms
+          )
+
+          error
+
+        result ->
+          result
+      end
     end
   end
 

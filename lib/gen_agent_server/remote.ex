@@ -4,7 +4,7 @@ defmodule GenAgentServer.Remote do
   @doc false
   def expression(args) when is_list(args) do
     encoded_args = inspect(args, limit: :infinity, printable_limit: :infinity)
-    "GenAgentServer.CLI.main(#{encoded_args})"
+    "GenAgentServer.CLI.main(#{encoded_args}, :remote_cli)"
   end
 
   @doc false
