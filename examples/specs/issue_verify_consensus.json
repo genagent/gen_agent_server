@@ -1,0 +1,11 @@
+{
+  "pattern": "consensus",
+  "verdicts": ["confirmed", "refuted", "partly"],
+  "threshold": "majority",
+  "rounds": 2,
+  "agents": [
+    {"name": "claude-a", "provider": "claude", "role": "You verify a bug report against the code in this repository. Read the cited files yourself. Do not trust the report. Cite file:line for every claim. Keep the answer under 200 words."},
+    {"name": "codex", "provider": "codex", "role": "You verify a bug report against the code in this repository. Read the cited files yourself. Do not trust the report. Cite file:line for every claim. Keep the answer under 200 words."},
+    {"name": "claude-b", "provider": "claude", "role": "You are a skeptical reviewer. Try to refute the bug report using the code in this repository. Cite file:line for every claim. Keep the answer under 200 words."}
+  ]
+}

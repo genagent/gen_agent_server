@@ -3,11 +3,13 @@ defmodule Mix.Tasks.GenAgentServer.Run do
   Run an Ensemble pattern from a JSON spec in a fresh local application.
 
       mix gen_agent_server.run SPEC.json --prompt "Review lib/foo.ex" [--prompt ...]
-          [--cwd DIR] [--to ROUTE] [--timeout MS] [--json]
+          [--cwd DIR] [--to ROUTE] [--timeout MS] [--json | --output FILE]
 
   `SPEC.json` is described in `GenAgentServer.PatternSpec`. Prompts can also
   be read from a file with `--prompts-file FILE` (one prompt per non-empty
-  line). `--cwd` defaults to the current directory. Exits non-zero if any
+  line). `--json` prints the report as JSON; `--output FILE` writes it to a
+  file and still prints the readable summary. Prefer `--output` in scripts:
+  Mix can print compile notices to stdout before the task starts. `--cwd` defaults to the current directory. Exits non-zero if any
   prompt did not complete.
   """
   @shortdoc "Run an Ensemble pattern from a JSON spec"
@@ -19,7 +21,8 @@ defmodule Mix.Tasks.GenAgentServer.Run do
     cwd: :string,
     to: :string,
     timeout: :integer,
-    json: :boolean
+    json: :boolean,
+    output: :string
   ]
 
   @impl true
@@ -40,6 +43,10 @@ defmodule Mix.Tasks.GenAgentServer.Run do
 
     Mix.Task.run("app.start")
 
+    # Model output is UTF-8; without this a piped stdout escapes code points
+    # above 255 and --json output becomes invalid (genagent/gen_agent_server#27).
+    :io.setopts(:standard_io, encoding: :unicode)
+
     run_opts =
       [cwd: Path.expand(Keyword.get(opts, :cwd, File.cwd!()))]
       |> maybe_put(:to, opts[:to])
@@ -47,7 +54,13 @@ defmodule Mix.Tasks.GenAgentServer.Run do
 
     case GenAgentServer.Run.run(spec, prompts, run_opts) do
       {:ok, report} ->
-        if opts[:json], do: IO.puts(Jason.encode!(report, pretty: true)), else: print(report)
+        cond do
+          opts[:output] -> File.write!(opts[:output], Jason.encode!(report, pretty: true))
+          opts[:json] -> IO.puts(Jason.encode!(report, pretty: true))
+          true -> :ok
+        end
+
+        unless opts[:json], do: print(report)
 
         unless Enum.all?(report.results, &(&1.status == :completed)) do
           exit({:shutdown, 1})

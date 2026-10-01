@@ -22,7 +22,8 @@ defmodule GenAgentServer.PatternSpec do
     * `pool` -- `"worker"` and `"worker_count"`.
     * `supervisor` -- `"coordinator"`, `"worker"`, optional `"decomposer"`
       (`"numbered"` default, or `"lines"`) and `"max_subtasks"` (default 5).
-    * `debate` -- `"agents"` (two), optional `"rounds"` (default 4) and
+    * `debate` -- `"agents"` (two), optional `"rounds"` (default 4; Ensemble
+      counts total responses, not exchanges) and
       `"reply"` (`"transcript"` default, or `"last"`).
     * `consensus` -- `"agents"` (two or more), `"verdicts"` (for example
       `["approve", "revise", "reject"]`), optional `"threshold"`
@@ -54,8 +55,10 @@ defmodule GenAgentServer.PatternSpec do
 
   @doc """
   Parse `spec`. `opts` supplies defaults for agent entries: `:cwd`,
-  `:codex_sandbox`, `:claude_permission_mode`. A `"cwd"` key in the spec
-  overrides `:cwd`.
+  `:codex_sandbox`, `:claude_permission_mode`. The spec keys `"cwd"`,
+  `"codex_sandbox"` (`"read_only"` or `"workspace_write"`), and
+  `"claude_permission_mode"` (`"plan"` or `"accept_edits"`) override them.
+  Both CLI providers are read-only unless a spec opts in.
   """
   @spec parse(map(), keyword()) :: {:ok, plan()} | {:error, term()}
   def parse(spec, opts \\ [])
@@ -67,7 +70,8 @@ defmodule GenAgentServer.PatternSpec do
         _ -> opts
       end
 
-    with {:ok, strategy_opts, routes} <- build(pattern, spec, opts) do
+    with {:ok, opts} <- edit_modes(spec, opts),
+         {:ok, strategy_opts, routes} <- build(pattern, spec, opts) do
       {:ok,
        %{
          pattern: pattern,
@@ -135,6 +139,33 @@ defmodule GenAgentServer.PatternSpec do
          threshold: threshold,
          rounds: rounds
        ], ["run"]}
+    end
+  end
+
+  # Edit modes are opt-in and limited to the choices profiles allow.
+  defp edit_modes(spec, opts) do
+    with {:ok, opts} <-
+           edit_mode(spec, opts, "codex_sandbox", %{
+             "read_only" => :read_only,
+             "workspace_write" => :workspace_write
+           }) do
+      edit_mode(spec, opts, "claude_permission_mode", %{
+        "plan" => :plan,
+        "accept_edits" => :accept_edits
+      })
+    end
+  end
+
+  defp edit_mode(spec, opts, key, choices) do
+    case Map.fetch(spec, key) do
+      :error ->
+        {:ok, opts}
+
+      {:ok, value} ->
+        case Map.fetch(choices, value) do
+          {:ok, atom} -> {:ok, Keyword.put(opts, String.to_existing_atom(key), atom)}
+          :error -> {:error, {:invalid, key, value}}
+        end
     end
   end
 

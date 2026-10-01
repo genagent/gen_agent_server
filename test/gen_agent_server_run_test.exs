@@ -81,6 +81,27 @@ defmodule GenAgentServer.RunTest do
                })
     end
 
+    test "edit modes are opt-in and limited to the profile choices" do
+      codex = %{"pattern" => "solo", "agent" => %{"provider" => "codex"}}
+
+      assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
+               PatternSpec.parse(codex, cwd: File.cwd!())
+
+      assert opts[:sandbox] == :read_only
+
+      assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
+               PatternSpec.parse(Map.put(codex, "codex_sandbox", "workspace_write"),
+                 cwd: File.cwd!()
+               )
+
+      assert opts[:sandbox] == :workspace_write
+
+      assert {:error, {:invalid, "codex_sandbox", "danger_full_access"}} =
+               PatternSpec.parse(Map.put(codex, "codex_sandbox", "danger_full_access"),
+                 cwd: File.cwd!()
+               )
+    end
+
     test "numbered decomposer reads list items and caps the count" do
       {:ok, split} = PatternSpec.decomposer("numbered", 2)
       assert split.("Plan:\n1. alpha\n2) beta\n- gamma") == ["alpha", "beta"]

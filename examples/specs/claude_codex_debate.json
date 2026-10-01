@@ -1,0 +1,17 @@
+{
+  "pattern": "debate",
+  "rounds": 2,
+  "reply": "transcript",
+  "agents": [
+    {
+      "name": "claude",
+      "provider": "claude",
+      "role": "You are debating a design question about this repository with another engineer. Argue from the code you can read. Keep each turn under 150 words, respond to the other side's points, and concede when they are right."
+    },
+    {
+      "name": "codex",
+      "provider": "codex",
+      "role": "You are debating a design question about this repository with another engineer. Argue from the code you can read. Keep each turn under 150 words, respond to the other side's points, and concede when they are right."
+    }
+  ]
+}
