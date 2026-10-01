@@ -23,7 +23,9 @@ spec = %{
 
 prompts =
   Enum.map(claims, fn c ->
-    location = if c["file"], do: "\nLocation: #{c["file"]}#{if c["line"], do: ":#{c["line"]}"}", else: ""
+    location =
+      if c["file"], do: "\nLocation: #{c["file"]}#{if c["line"], do: ":#{c["line"]}"}", else: ""
+
     "Claim: #{c["title"]}#{location}\n\nDetail: #{c["summary"] || ""}"
   end)
 
@@ -47,7 +49,9 @@ verified =
 :io.setopts(:standard_io, encoding: :unicode)
 
 for v <- verified do
-  IO.puts("#{String.pad_trailing(v["verdict"], 9)} #{v["id"]}  (#{div(v["elapsed_ms"], 1000)} s)  #{v["title"]}")
+  IO.puts(
+    "#{String.pad_trailing(v["verdict"], 9)} #{v["id"]}  (#{div(v["elapsed_ms"], 1000)} s)  #{v["title"]}"
+  )
 end
 
 IO.puts("\n#{length(verified)} claims, #{report.elapsed_ms} ms total")
