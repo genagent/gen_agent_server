@@ -211,13 +211,14 @@ mix gen_agent_server.run examples/specs/echo/pool.json \
 
 `mix gen_agent_server.ops` lists the typed operations available to scripts and
 future MCP adapters. `--remote` runs an operation in the release above, where
-invocation results persist across commands:
+invocation results persist across commands. Set `MIX_QUIET=1` when parsing
+stdout so a first-time Mix compile does not prefix the JSON with build notices:
 
 ```sh
-mix gen_agent_server.ops patterns
-mix gen_agent_server.ops invoke --agent echo --prompt "hello" --remote
-mix gen_agent_server.ops result --id INVOCATION_ID --remote
-mix gen_agent_server.ops run_pattern \
+MIX_QUIET=1 mix gen_agent_server.ops patterns
+MIX_QUIET=1 mix gen_agent_server.ops invoke --agent echo --prompt "hello" --remote
+MIX_QUIET=1 mix gen_agent_server.ops result --id INVOCATION_ID --remote
+MIX_QUIET=1 mix gen_agent_server.ops run_pattern \
   --spec @examples/specs/echo/pool.json --prompts "Check a claim" --remote
 ```
 

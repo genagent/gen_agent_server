@@ -10,7 +10,8 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
   value; list parameters repeat (`--prompts a --prompts b`); object parameters
   take JSON or `@path/to/file.json`. Parameter names use underscores, as in
   `--timeout_ms`. Output is a JSON document on stdout; errors exit non-zero
-  with the error JSON on stderr.
+  with the error JSON on stderr. On a fresh build, Mix can print compilation
+  notices before the task starts; use `MIX_QUIET=1` when parsing stdout.
 
   Without `--remote` the operation runs in a fresh local application, so state
   such as invocation results lasts only for the command. With `--remote` it
@@ -24,7 +25,7 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
 
   @impl true
   def run([]) do
-    compile_quietly()
+    Mix.Task.run("compile")
     unicode_stdout()
 
     for op <- Ops.list() do
@@ -34,7 +35,7 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
   end
 
   def run([name | argv]) do
-    compile_quietly()
+    Mix.Task.run("compile")
     unicode_stdout()
 
     op =
@@ -134,17 +135,4 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
   end
 
   defp unicode_stdout, do: :io.setopts(:standard_io, encoding: :unicode)
-
-  # Mix compilation notices go to stdout by default. Keep the operation's
-  # stdout as one JSON document even on its first invocation after a checkout.
-  defp compile_quietly do
-    shell = Mix.shell()
-
-    try do
-      Mix.shell(Mix.Shell.Quiet)
-      Mix.Task.run("compile")
-    after
-      Mix.shell(shell)
-    end
-  end
 end
