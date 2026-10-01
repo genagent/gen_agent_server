@@ -10,8 +10,8 @@ defmodule GenAgentServer.Jobs do
     entries =
       case document do
         %{"jobs" => jobs} when is_list(jobs) -> jobs
-        %{} -> []
-        _ -> raise ArgumentError, "#{path} must contain a JSON object"
+        %{} = object when not is_map_key(object, "jobs") -> []
+        _ -> raise ArgumentError, "#{path} jobs must be an array"
       end
 
     jobs = Enum.map(entries, &parse!(&1, Path.dirname(path), instances))
