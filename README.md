@@ -176,6 +176,12 @@ A network API, MCP adapter, and dashboard are follow-on layers.
 The [dogfooding log](docs/dogfooding.md) records bounded real tasks, observed
 issues, and the planned progression through Ensemble patterns.
 
+For a local, model-free look at Ensemble's Pipeline and Supervisor patterns,
+run `mix run examples/ensemble_patterns.exs`. The example checks stage
+handoff, two-worker fan-out, and worker cleanup inside the same OTP
+application. It uses Ensemble directly; server-managed pattern invocations
+and result IDs are a separate integration step.
+
 ## Current contract
 
 The default instance and any additional instances each own a named Ensemble
