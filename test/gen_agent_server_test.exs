@@ -109,7 +109,8 @@ defmodule GenAgentServerTest do
   end
 
   test "CLI lists agents and routes an ask" do
-    assert {:ok, "server/default"} = GenAgentServer.CLI.run(["instances"])
+    assert {:ok, instances} = GenAgentServer.CLI.run(["instances"])
+    assert "server/default" in String.split(instances, "\n")
     assert capture_io(fn -> assert :ok = GenAgentServer.CLI.main(["agents"]) end) == "echo\n"
 
     assert capture_io(fn -> assert :ok = GenAgentServer.CLI.main(["ask", "echo", "hello"]) end) ==
@@ -171,6 +172,10 @@ defmodule GenAgentServerTest do
 
     assert_raise Mix.Error, ~r/require a running server/, fn ->
       Mix.Tasks.GenAgentServer.run(["--instance", "project", "result", "inv-1"])
+    end
+
+    assert_raise Mix.Error, ~r/require a running server/, fn ->
+      Mix.Tasks.GenAgentServer.run(["run-job", "probe"])
     end
   end
 
