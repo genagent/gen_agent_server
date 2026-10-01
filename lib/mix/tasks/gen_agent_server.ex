@@ -5,7 +5,13 @@ defmodule Mix.Tasks.GenAgentServer do
 
   @impl true
   def run(args) do
-    if match?([command | _] when command in ["invoke", "result"], args) do
+    command_args =
+      case args do
+        ["--instance", _name | rest] -> rest
+        rest -> rest
+      end
+
+    if match?([command | _] when command in ["invoke", "result"], command_args) do
       Mix.raise("invoke/result require a running server; use mix gen_agent_server.remote")
     end
 
@@ -16,7 +22,9 @@ defmodule Mix.Tasks.GenAgentServer do
         IO.puts(output)
 
       {:error, :usage} ->
-        Mix.raise("usage: mix gen_agent_server agents | status | ask PROVIDER PROMPT")
+        Mix.raise(
+          "usage: mix gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT"
+        )
 
       {:error, reason} ->
         Mix.raise("GenAgent request failed: #{inspect(reason)}")

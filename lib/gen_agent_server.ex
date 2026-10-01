@@ -9,6 +9,13 @@ defmodule GenAgentServer do
 
   def session_name, do: Application.fetch_env!(:gen_agent_server, :session_name)
 
+  def instances do
+    Registry.select(GenAgentServer.Registry, [
+      {{{:instance, :"$1"}, :_, :_}, [], [:"$1"]}
+    ])
+    |> Enum.sort()
+  end
+
   def start_instance(name, agents, opts \\ [])
       when is_binary(name) and is_list(agents) and is_list(opts) do
     DynamicSupervisor.start_child(
