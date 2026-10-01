@@ -32,7 +32,7 @@ defmodule GenAgentServer.Invocations do
     case Registry.lookup(GenAgentServer.Registry, {:invocations, name}) do
       [{pid, _}] ->
         try do
-          GenServer.call(pid, request)
+          GenServer.call(pid, request, :infinity)
         catch
           :exit, reason ->
             if Process.alive?(pid), do: exit(reason), else: {:error, :instance_not_found}
@@ -82,6 +82,30 @@ defmodule GenAgentServer.Invocations do
 
   @impl true
   def handle_call({:invoke, agent, prompt, opts}, _from, state) do
+    case collect_available(state) do
+      {:ok, state} -> admit(agent, prompt, opts, state)
+      {:error, reason} -> {:stop, {:inbox_failed, reason}, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:result, id}, _from, state) do
+    case collect_available(state) do
+      {:ok, state} ->
+        result =
+          cond do
+            Map.has_key?(state.pending, id) -> {:ok, :pending}
+            Map.has_key?(state.completed, id) -> Map.fetch!(state.completed, id)
+            true -> {:error, :not_found}
+          end
+
+        {:reply, result, state}
+
+      {:error, reason} ->
+        {:stop, {:inbox_failed, reason}, {:error, reason}, state}
+    end
+  end
+
+  defp admit(agent, prompt, opts, state) do
     cond do
       not MapSet.member?(state.agents, agent) ->
         {:reply, {:error, {:unknown_agent, agent}}, state}
@@ -108,28 +132,29 @@ defmodule GenAgentServer.Invocations do
     end
   end
 
-  def handle_call({:result, id}, _from, state) do
-    result =
-      cond do
-        Map.has_key?(state.pending, id) -> {:ok, :pending}
-        Map.has_key?(state.completed, id) -> Map.fetch!(state.completed, id)
-        true -> {:error, :not_found}
-      end
-
-    {:reply, result, state}
-  end
-
   @impl true
   def handle_info(:collect, state) do
     state = %{state | poll_scheduled?: false}
 
-    case GenAgentEnsemble.inbox(state.name) do
-      {:ok, entries} when is_list(entries) ->
-        state = Enum.reduce(entries, state, &record_completion/2)
+    case collect_available(state) do
+      {:ok, state} ->
         {:noreply, schedule_poll(state)}
 
+      {:error, reason} ->
+        {:stop, {:inbox_failed, reason}, state}
+    end
+  end
+
+  defp collect_available(%{pending: pending} = state) when map_size(pending) == 0,
+    do: {:ok, state}
+
+  defp collect_available(state) do
+    case GenAgentEnsemble.inbox(state.name) do
+      {:ok, entries} when is_list(entries) ->
+        {:ok, Enum.reduce(entries, state, &record_completion/2)}
+
       other ->
-        {:stop, {:inbox_failed, other}, state}
+        {:error, other}
     end
   end
 

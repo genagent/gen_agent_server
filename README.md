@@ -37,12 +37,13 @@ and separate provider sessions. `mix gen_agent_server ask PROVIDER PROMPT`
 starts a fresh application for a single request; use IEx for a persistent
 multi-turn session.
 
-`invoke/2` returns an instance-scoped ID immediately. `result/1` returns
+`invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
 `{:ok, :pending}`, `{:ok, :completed, response}`, or
 `{:ok, :failed, reason}`. Completed results can be read repeatedly, including
 after the caller exits. The default instance admits at most 16 in-flight
 turns and retains up to 100 completions; additional admissions
-return `{:error, :busy}` until a turn finishes. An `ask/3` timeout only ends
+return `{:error, :busy}` while all in-flight slots remain occupied. A new
+admission checks for completed turns before applying this limit. An `ask/3` timeout only ends
 the wait: the invocation keeps running and its result remains available through
 its ID if the caller used `invoke/2`.
 

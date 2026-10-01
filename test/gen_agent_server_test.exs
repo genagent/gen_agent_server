@@ -75,6 +75,25 @@ defmodule GenAgentServerTest do
     assert {:ok, _id} = GenAgentServer.invoke(name, "slow", "two")
   end
 
+  test "new admission collects a finished turn before applying the in-flight limit" do
+    name = "test-admission-#{System.unique_integer([:positive])}"
+    agents = [{"echo", GenAgentEnsemble.Agents.Simple, [backend: GenAgentEnsemble.Backends.Echo]}]
+
+    assert {:ok, _pid} =
+             GenAgentServer.start_instance(name, agents,
+               max_in_flight: 1,
+               poll_interval_ms: 1_000
+             )
+
+    on_exit(fn -> GenAgentServer.stop_instance(name) end)
+
+    assert {:ok, first} = GenAgentServer.invoke(name, "echo", "one")
+    await_ensemble_idle(name)
+    assert {:ok, second} = GenAgentServer.invoke(name, "echo", "two")
+    assert {:ok, :completed, %{text: "echo: one"}} = GenAgentServer.result(name, first)
+    assert {:ok, :completed, %{text: "echo: two"}} = await_result(name, second)
+  end
+
   test "failed turns are retained for repeatable reads" do
     name = "test-failure-#{System.unique_integer([:positive])}"
 
@@ -135,6 +154,26 @@ defmodule GenAgentServerTest do
   end
 
   defp await_result(id), do: await_result(GenAgentServer.session_name(), id)
+
+  defp await_ensemble_idle(name) do
+    deadline = System.monotonic_time(:millisecond) + 2_000
+    wait_ensemble_idle(name, deadline)
+  end
+
+  defp wait_ensemble_idle(name, deadline) do
+    case GenAgentEnsemble.status(name) do
+      {:ok, %{in_flight: 0}} ->
+        :ok
+
+      _ ->
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(10)
+          wait_ensemble_idle(name, deadline)
+        else
+          flunk("timed out waiting for ensemble #{name}")
+        end
+    end
+  end
 
   defp await_result(instance, id) do
     deadline = System.monotonic_time(:millisecond) + 2_000
