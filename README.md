@@ -53,6 +53,7 @@ store. Paths in `cwd` are relative to the JSON file; absolute paths also work.
 ```
 
 ```sh
+MIX_ENV=prod mix release
 GEN_AGENT_SERVER_CONFIG=/path/to/projects.json \
 RELEASE_NODE=gen_agent_server_dogfood \
 _build/prod/rel/gen_agent_server/bin/gen_agent_server start
