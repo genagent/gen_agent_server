@@ -67,6 +67,7 @@ defmodule GenAgentServerDispatchTest do
     }
 
     File.write!(path, Jason.encode!(%{jobs: [job]}))
+    assert [] = GenAgentServer.Profiles.load!(path)
 
     assert_raise ArgumentError, ~r/unknown instance or agent/, fn ->
       GenAgentServer.Jobs.load!(path, %{"server/default" => ["echo"]})
