@@ -75,6 +75,16 @@ defmodule GenAgentServer.OpsTest do
 
     assert {:error, %{code: "unknown_pattern"}} =
              Ops.call("run_pattern", %{"spec" => %{"pattern" => "mesh"}, "prompts" => ["a"]})
+
+    assert {:error, %{code: "invalid_role"}} =
+             Ops.call("run_pattern", %{
+               "spec" => %{
+                 "pattern" => "consensus",
+                 "agents" => [%{"provider" => "echo", "role" => 7}, %{"provider" => "echo"}],
+                 "verdicts" => ["yes"]
+               },
+               "prompts" => ["a"]
+             })
   end
 
   test "the remote entry point prints one JSON envelope" do

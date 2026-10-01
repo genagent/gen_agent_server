@@ -204,7 +204,7 @@ defmodule GenAgentServer.PatternSpec do
 
   defp agent(%{"provider" => provider} = entry, default_name, opts, role_suffix) do
     name = Map.get(entry, "name", default_name)
-    role = join_role(Map.get(entry, "role"), role_suffix)
+    role = Map.get(entry, "role")
 
     provider_opts =
       opts
@@ -220,6 +220,7 @@ defmodule GenAgentServer.PatternSpec do
 
       true ->
         with {:ok, backend_opts} <- Providers.backend_opts(provider, provider_opts) do
+          role = join_role(role, role_suffix)
           backend_opts = if role, do: backend_opts ++ [role: role], else: backend_opts
           {:ok, {name, Agents.Role, backend_opts}}
         end

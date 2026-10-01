@@ -79,6 +79,13 @@ defmodule GenAgentServer.RunTest do
                  "verdicts" => ["yes"],
                  "threshold" => 5
                })
+
+      assert {:error, {:invalid_role, "member-1"}} =
+               PatternSpec.parse(%{
+                 "pattern" => "consensus",
+                 "agents" => [Map.put(@echo, "role", 7), @echo],
+                 "verdicts" => ["yes"]
+               })
     end
 
     test "edit modes are opt-in and limited to the profile choices" do

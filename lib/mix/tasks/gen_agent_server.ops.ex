@@ -24,7 +24,7 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
 
   @impl true
   def run([]) do
-    Mix.Task.run("compile")
+    compile_quietly()
     unicode_stdout()
 
     for op <- Ops.list() do
@@ -34,7 +34,7 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
   end
 
   def run([name | argv]) do
-    Mix.Task.run("compile")
+    compile_quietly()
     unicode_stdout()
 
     op =
@@ -134,4 +134,17 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
   end
 
   defp unicode_stdout, do: :io.setopts(:standard_io, encoding: :unicode)
+
+  # Mix compilation notices go to stdout by default. Keep the operation's
+  # stdout as one JSON document even on its first invocation after a checkout.
+  defp compile_quietly do
+    shell = Mix.shell()
+
+    try do
+      Mix.shell(Mix.Shell.Quiet)
+      Mix.Task.run("compile")
+    after
+      Mix.shell(shell)
+    end
+  end
 end
