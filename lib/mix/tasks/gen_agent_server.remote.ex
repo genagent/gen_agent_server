@@ -31,12 +31,29 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
         IO.write(output)
 
       {:error, :timeout} ->
-        Mix.raise(
-          "server RPC timed out; use invoke followed by result for long work, or increase GEN_AGENT_SERVER_RPC_TIMEOUT_MS / GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS"
-        )
+        Mix.raise(timeout_message(args))
 
       {output, _status} ->
         Mix.raise("server RPC failed: #{String.trim(output)}")
     end
   end
+
+  defp timeout_message(["--instance", _instance, command | _]), do: timeout_message(command)
+  defp timeout_message([command | _]), do: timeout_message(command)
+
+  defp timeout_message("ask"),
+    do:
+      "server ask RPC timed out; use invoke followed by result for future long work, or increase GEN_AGENT_SERVER_ASK_RPC_TIMEOUT_MS"
+
+  defp timeout_message("invoke"),
+    do:
+      "server invoke RPC timed out before an ID was returned; check server logs before retrying to avoid duplicate work, or increase GEN_AGENT_SERVER_RPC_TIMEOUT_MS"
+
+  defp timeout_message("result"),
+    do:
+      "server result RPC timed out; retry result with the same ID, or increase GEN_AGENT_SERVER_RPC_TIMEOUT_MS"
+
+  defp timeout_message(_command),
+    do:
+      "server RPC timed out; check release connectivity and logs, or increase GEN_AGENT_SERVER_RPC_TIMEOUT_MS"
 end
