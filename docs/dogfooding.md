@@ -42,26 +42,26 @@ permission or to establish that a subprocess stopped.
 | 17 | The reusable Codex-to-Claude Pipeline example reviewed duplicate project-profile names. | Claude verified the draft against `Profiles.load!/1` and its regression test, and explicitly limited the conclusion to file-loaded profiles. A first invocation exposed that `mix run FILE -- ARGS` passes `--` to `System.argv/0` for script files, so the documented command was corrected to `mix run FILE ARGS` before the successful run. | Read-only two-provider example works against a real project. The argument fix is mechanical; the provider's scoped conclusion is a useful behavioral check. |
 | 18 | A managed Supervisor used an Echo coordinator to split independent read-only reviews of `remote.ex` and `invocations.ex` across two Codex workers. | Both labeled findings matched source: remote RPC calls use blocking `System.cmd/3` without a timeout, and completed results evict the oldest ID beyond the configured limit. Final status had only the coordinator, no in-flight work, and no pending tokens. | Fan-out, result attribution, and worker cleanup passed. The unbounded remote command wait is a separate mechanical reliability gap to address. |
 | 19 | The reusable two-worker Codex example reviewed profile and job configuration separately. | One worker found that control characters in profile names could forge extra `instances` output lines; the other found invalid cron strings reached Quantum without job and file context. Source inspection reproduced both paths. | Mechanical; reject control characters and normalize cron during configuration loading, with focused regression tests. The parallel example completed and its workers stopped. |
+| 20 | Two read-only Codex workers reviewed the remote RPC timeout and process cleanup through the managed Supervisor. | They identified an invalid timeout that could spawn before raising, a port PID race, and a risk of signaling a reused PID. Source inspection confirmed the paths. | Mechanical; validate before spawn, capture and verify the process identity before signaling, and add focused regression tests in [PR #19](https://github.com/genagent/gen_agent_server/pull/19). |
+| 21 | The Codex-to-Claude Pipeline reviewed first-use instructions on the published core 0.4.0, Ensemble 0.2.0, and CLI adapter releases. | Claude verified that the named-profile README example started `_build/prod/rel/...` before instructing a fresh checkout to run `MIX_ENV=prod mix release`. Source inspection confirmed the ordering. | Mechanical documentation fix; put the release build before the first start command. Both providers completed the read-only handoff. |
 
 The Codex CLI inherited local MCP configuration and logged connection warnings
 for unavailable servers during these runs, though the turn completed. Track
 that as environment/configuration noise rather than a model finding. Claude
-could start but could not complete a live turn while account usage was
-exhausted; no Claude behavior conclusion follows from that attempt.
+could not complete run 4 while account usage was exhausted; later runs did
+complete after the usage reset.
 
 ## Next increments
 
-1. Repeat one small read-only audit independently through Claude and Codex
-   after Claude usage resets. Compare claims against files and tests; record
-   disagreement or missing evidence as behavioral findings only after checking
-   each provider's delivered instructions and tool access.
-2. Try a read-only critique/revision task with Pipeline. Specify what each
-   stage receives and how stage failure stops the run before asking a model.
-3. Try Supervisor fan-out on independent, read-only files. Bound worker count
-   and verify partial failure, late replies, and result attribution.
-4. Only then try a write task in an isolated worktree, with a human-reviewed
-   plan and ordinary test/PR validation. Keep server admission and result
-   semantics explicit before adding multiple clients, MCP, or Oban.
+1. Exercise a larger read-only task through the published stack and compare
+   Claude/Codex claims against files and tests. Check delivered instructions
+   and tool access before classifying a disagreement as behavioral.
+2. Test Supervisor partial failure, late replies, and result attribution with
+   bounded workers. Decide whether opt-in Pipeline stage artifacts are needed
+   for review provenance.
+3. Try a write task in an isolated worktree, with a human-reviewed plan and
+   ordinary test/PR validation. Keep admission and result semantics explicit
+   before adding more clients or unattended orchestration.
 
 For every run, note the exact pattern, provider versions, repository commit,
 task, expected result, observed result, and whether the cause was mechanical,
