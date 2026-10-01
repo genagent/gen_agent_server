@@ -8,6 +8,8 @@ defmodule GenAgentServer.Invocations do
 
   use GenServer
 
+  @sources [:api, :local_cli, :remote_cli, :scheduler, :mcp]
+
   @type result ::
           {:ok, :pending}
           | {:ok, :completed, GenAgent.Response.t()}
@@ -106,30 +108,51 @@ defmodule GenAgentServer.Invocations do
   end
 
   defp admit(agent, prompt, opts, state) do
+    {source, route_opts} = Keyword.pop(opts, :source, :api)
+
     cond do
+      source not in @sources ->
+        reject(state, agent, :unknown, :invalid_source)
+
       not MapSet.member?(state.agents, agent) ->
-        {:reply, {:error, {:unknown_agent, agent}}, state}
+        reject(state, agent, source, {:unknown_agent, agent})
 
       map_size(state.pending) >= state.max_in_flight ->
-        {:reply, {:error, :busy}, state}
+        reject(state, agent, source, :busy)
 
       true ->
-        case GenAgentEnsemble.tell(state.name, prompt, Keyword.put(opts, :agent, agent)) do
+        case GenAgentEnsemble.tell(state.name, prompt, Keyword.put(route_opts, :agent, agent)) do
           {:ok, token} ->
             id = "inv-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
+            started_at_ms = System.monotonic_time(:millisecond)
+
+            metadata = %{
+              instance: state.name,
+              agent: agent,
+              invocation_id: id,
+              ensemble_token: token,
+              source: source
+            }
 
             state = %{
               state
-              | pending: Map.put(state.pending, id, token),
+              | pending:
+                  Map.put(state.pending, id, %{metadata: metadata, started_at_ms: started_at_ms}),
                 by_token: Map.put(state.by_token, token, id)
             }
 
+            GenAgentServer.Telemetry.start(metadata)
             {:reply, {:ok, id}, schedule_poll(state)}
 
-          error ->
-            {:reply, error, state}
+          {:error, reason} ->
+            reject(state, agent, source, reason)
         end
     end
+  end
+
+  defp reject(state, agent, source, reason) do
+    GenAgentServer.Telemetry.rejected(state.name, agent, source, reason)
+    {:reply, {:error, reason}, state}
   end
 
   @impl true
@@ -164,10 +187,17 @@ defmodule GenAgentServer.Invocations do
         state
 
       {id, by_token} ->
+        %{metadata: metadata, started_at_ms: started_at_ms} = Map.fetch!(state.pending, id)
+
         result =
           case outcome do
-            {:ok, response} -> {:ok, :completed, response}
-            {:error, reason} -> {:ok, :failed, reason}
+            {:ok, response} ->
+              GenAgentServer.Telemetry.stop(metadata, started_at_ms)
+              {:ok, :completed, response}
+
+            {:error, reason} ->
+              GenAgentServer.Telemetry.error(metadata, started_at_ms, reason)
+              {:ok, :failed, reason}
           end
 
         state = %{
