@@ -43,16 +43,22 @@ RELEASE_NODE=gen_agent_server_dogfood \
 _build/prod/rel/gen_agent_server/bin/gen_agent_server start
 ```
 
-From another terminal, use the same `RELEASE_NODE` with the release's `rpc`
-command, for example:
+From another terminal, use the same `RELEASE_NODE` with the local remote
+command. It passes the prompt as data, so quotes and newlines do not need to
+be embedded in an Elixir expression:
 
 ```sh
 RELEASE_NODE=gen_agent_server_dogfood \
-_build/prod/rel/gen_agent_server/bin/gen_agent_server rpc \
-  'GenAgentServer.CLI.main(["ask", "echo", "hello"])'
+mix gen_agent_server.remote ask echo "hello"
 ```
 
+Set `GEN_AGENT_SERVER_RELEASE_BIN` if the release binary lives elsewhere.
+The release's `rpc` command remains available for direct Elixir calls.
+
 A network API, MCP adapter, and dashboard are follow-on layers.
+
+The [dogfooding log](docs/dogfooding.md) records bounded real tasks, observed
+issues, and the planned progression through Ensemble patterns.
 
 ## Current contract
 
