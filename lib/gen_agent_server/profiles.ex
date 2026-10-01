@@ -33,7 +33,7 @@ defmodule GenAgentServer.Profiles do
     result
   end
 
-  defp parse_profile!(%{"name" => name, "cwd" => cwd, "providers" => providers}, base)
+  defp parse_profile!(%{"name" => name, "cwd" => cwd, "providers" => providers} = entry, base)
        when is_binary(name) and is_binary(cwd) and is_list(providers) do
     unless name != "" and not String.contains?(name, "/") do
       raise ArgumentError, "profile name must be non-empty and contain no slash"
@@ -53,6 +53,34 @@ defmodule GenAgentServer.Profiles do
       raise ArgumentError, "profile #{name} contains duplicate providers"
     end
 
+    allowed_keys = ~w(name cwd providers codex_sandbox claude_permission_mode)
+
+    unless Enum.all?(Map.keys(entry), &(&1 in allowed_keys)) do
+      raise ArgumentError, "profile #{name} contains unknown fields"
+    end
+
+    codex_sandbox = Map.get(entry, "codex_sandbox", "read_only")
+    claude_permission = Map.get(entry, "claude_permission_mode", "plan")
+
+    unless codex_sandbox in ["read_only", "workspace_write"] do
+      raise ArgumentError, "profile #{name} has invalid codex_sandbox"
+    end
+
+    unless claude_permission in ["plan", "accept_edits"] do
+      raise ArgumentError, "profile #{name} has invalid claude_permission_mode"
+    end
+
+    if Map.has_key?(entry, "codex_sandbox") and "codex" not in providers do
+      raise ArgumentError, "profile #{name} sets codex_sandbox without codex"
+    end
+
+    if Map.has_key?(entry, "claude_permission_mode") and "claude" not in providers do
+      raise ArgumentError, "profile #{name} sets claude_permission_mode without claude"
+    end
+
+    codex_sandbox = if codex_sandbox == "read_only", do: :read_only, else: :workspace_write
+    claude_permission = if claude_permission == "plan", do: :plan, else: :accept_edits
+
     agents =
       Enum.map(providers, fn provider ->
         opts =
@@ -61,13 +89,13 @@ defmodule GenAgentServer.Profiles do
               [backend: @backends[provider]]
 
             "claude" ->
-              [backend: @backends[provider], cwd: cwd, permission_mode: :plan]
+              [backend: @backends[provider], cwd: cwd, permission_mode: claude_permission]
 
             "codex" ->
               [
                 backend: @backends[provider],
                 cwd: cwd,
-                sandbox: :read_only,
+                sandbox: codex_sandbox,
                 approval_policy: :never
               ]
           end

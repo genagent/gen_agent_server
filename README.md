@@ -72,8 +72,14 @@ The default `server/default` instance remains available and uses
 `GEN_AGENT_SERVER_PROVIDERS` and `GEN_AGENT_SERVER_CWD`. Profile names must be
 unique and cannot contain `/`. A missing directory, unknown provider, or
 duplicate name fails startup. Profiles currently use the same read-only
-Claude/Codex settings as the default; use a separate reviewed worktree for
-write-enabled experiments until a scoped write policy is added.
+Claude/Codex settings as the default. A profile can opt in to edits with
+`"codex_sandbox": "workspace_write"` and/or
+`"claude_permission_mode": "accept_edits"`. Codex then uses its workspace
+write sandbox with approvals disabled; Claude uses its CLI's accept-edits
+permission mode. These are provider controls, not a server-enforced file
+allowlist. Use a separate worktree for coding tasks and review changes before
+merging. The server rejects broader Codex sandbox modes and Claude's bypass
+mode from profile configuration.
 
 ## Optional scheduled turns
 
