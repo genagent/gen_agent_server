@@ -11,6 +11,27 @@ defmodule GenAgentServer.CLI do
     {:ok, Enum.join(GenAgentServer.instances(), "\n")}
   end
 
+  def run(["jobs"], _source) do
+    {:ok, Enum.join(GenAgentServer.Dispatch.jobs(), "\n")}
+  end
+
+  def run(["job", name], _source) do
+    case GenAgentServer.Dispatch.latest(name) do
+      {:ok, nil} -> {:ok, "never run"}
+      {:ok, id} -> {:ok, id}
+      error -> error
+    end
+  end
+
+  def run(["run-job", name], _source) do
+    if name in GenAgentServer.Dispatch.jobs() do
+      GenAgentServer.Scheduler.run_job(String.to_existing_atom(name))
+      {:ok, "queued"}
+    else
+      {:error, :unknown_job}
+    end
+  end
+
   def run(["--instance", instance | args], source) when args != [] do
     run_instance(instance, args, source)
   end
@@ -56,7 +77,7 @@ defmodule GenAgentServer.CLI do
 
       {:error, :usage} ->
         raise ArgumentError,
-              "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+              "usage: gen_agent_server instances | jobs | job NAME | run-job NAME | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
 
       {:error, reason} ->
         raise RuntimeError, "GenAgent request failed: #{inspect(reason)}"

@@ -9,6 +9,26 @@ defmodule GenAgentServer.Application do
     profile_file = Application.get_env(:gen_agent_server, :profile_file)
     profiles = if profile_file, do: GenAgentServer.Profiles.load!(profile_file), else: []
 
+    instances =
+      Map.new([{session_name, agents} | profiles], fn {name, specs} ->
+        {name, Enum.map(specs, &elem(&1, 0))}
+      end)
+
+    jobs = GenAgentServer.Jobs.load!(profile_file, instances)
+
+    quantum_jobs =
+      Enum.map(jobs, fn job ->
+        [
+          name: job.name,
+          schedule: job.schedule,
+          overlap: job.overlap,
+          run_strategy: Quantum.RunStrategy.Local,
+          task: {GenAgentServer.Dispatch, :run_job, [job.name]}
+        ]
+      end)
+
+    Application.put_env(:gen_agent_server, GenAgentServer.Scheduler, jobs: quantum_jobs)
+
     if Enum.any?(profiles, fn {name, _agents} -> name == session_name end) do
       raise ArgumentError, "profile name conflicts with the default instance: #{session_name}"
     end
@@ -29,7 +49,9 @@ defmodule GenAgentServer.Application do
             id: {:profile, name},
             restart: :permanent
           )
-        end)
+        end) ++
+        [{GenAgentServer.Dispatch, jobs}] ++
+        if(jobs == [], do: [], else: [GenAgentServer.Scheduler])
 
     Supervisor.start_link(children,
       strategy: :rest_for_one,

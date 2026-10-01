@@ -11,8 +11,10 @@ defmodule Mix.Tasks.GenAgentServer do
         rest -> rest
       end
 
-    if match?([command | _] when command in ["invoke", "result"], command_args) do
-      Mix.raise("invoke/result require a running server; use mix gen_agent_server.remote")
+    if match?([command | _] when command in ["invoke", "result", "job", "run-job"], command_args) do
+      Mix.raise(
+        "invoke/result/job/run-job require a running server; use mix gen_agent_server.remote"
+      )
     end
 
     Mix.Task.run("app.start")

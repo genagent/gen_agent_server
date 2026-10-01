@@ -19,6 +19,7 @@ defmodule GenAgentServer.Profiles do
     profiles =
       case document do
         %{"profiles" => entries} when is_list(entries) -> entries
+        %{} = object when not is_map_key(object, "profiles") -> []
         _ -> raise ArgumentError, "#{path} must contain a profiles array"
       end
 
