@@ -44,6 +44,9 @@ permission or to establish that a subprocess stopped.
 | 19 | The reusable two-worker Codex example reviewed profile and job configuration separately. | One worker found that control characters in profile names could forge extra `instances` output lines; the other found invalid cron strings reached Quantum without job and file context. Source inspection reproduced both paths. | Mechanical; reject control characters and normalize cron during configuration loading, with focused regression tests. The parallel example completed and its workers stopped. |
 | 20 | Two read-only Codex workers reviewed the remote RPC timeout and process cleanup through the managed Supervisor. | They identified an invalid timeout that could spawn before raising, a port PID race, and a risk of signaling a reused PID. Source inspection confirmed the paths. | Mechanical; validate before spawn, capture and verify the process identity before signaling, and add focused regression tests in [PR #19](https://github.com/genagent/gen_agent_server/pull/19). |
 | 21 | The Codex-to-Claude Pipeline reviewed first-use instructions on the published core 0.4.0, Ensemble 0.2.0, and CLI adapter releases. | Claude verified that the named-profile README example started `_build/prod/rel/...` before instructing a fresh checkout to run `MIX_ENV=prod mix release`. Source inspection confirmed the ordering. | Mechanical documentation fix; put the release build before the first start command. Both providers completed the read-only handoff. |
+| 22 | A managed Supervisor ran three read-only Codex reviews of core issues #90, #91, and #93 at once. | Each worker returned source locations and a bounded fix recommendation. The final server status had no in-flight work or pending tokens. Independent implementation and CI subsequently produced merged core PRs #153, #154, and #155. | Pool routing and cleanup passed with three workers; source and tests, rather than worker claims alone, established the fixes. This run used a temporary script; the reusable example now accepts two to four tasks. |
+| 23 | Two read-only Codex workers reviewed core issues #92 and #125 through the managed Supervisor. | #125 had a narrow error-classification fix, later merged in core PR #162. #92 exposed a longer-turn overflow contract that a larger finite message cap would only postpone. Both worker responses returned and the pool settled. | Separate the bounded backend fix from the core design problem; the latter needs an explicit contract before implementation. |
+| 24 | Claude designed, Codex implemented, and Claude reviewed a queued-request cancellation change for core issue #102 through a managed Pipeline. | The reviewer approved after 11 focused tests; the core suite later passed 179 tests. Codex could edit an isolated worktree but its sandbox could not write Git metadata pointed outside its workspace, so it committed an identical diff in a temporary clone. The source files were compared before the PR was opened. | Design, implementation, and review handoffs completed. The Git worktree boundary is a mechanical development-environment constraint; the queued-cancellation PR still needs green CI before merging. |
 
 The Codex CLI inherited local MCP configuration and logged connection warnings
 for unavailable servers during these runs, though the turn completed. Track
@@ -53,15 +56,17 @@ complete after the usage reset.
 
 ## Next increments
 
-1. Exercise a larger read-only task through the published stack and compare
-   Claude/Codex claims against files and tests. Check delivered instructions
-   and tool access before classifying a disagreement as behavioral.
+1. Repeat the two-provider design/implementation/review Pipeline on a larger
+   core change and retain enough evidence to compare each stage with files and
+   tests. Check delivered instructions and tool access before classifying a
+   disagreement as behavioral.
 2. Test Supervisor partial failure, late replies, and result attribution with
    bounded workers. Decide whether opt-in Pipeline stage artifacts are needed
    for review provenance.
-3. Try a write task in an isolated worktree, with a human-reviewed plan and
-   ordinary test/PR validation. Keep admission and result semantics explicit
-   before adding more clients or unattended orchestration.
+3. Make isolated-worktree writes and commits reliable under the provider's
+   sandbox, then repeat an end-to-end write task with ordinary test/PR
+   validation. Keep admission and result semantics explicit before adding
+   more clients or unattended orchestration.
 
 For every run, note the exact pattern, provider versions, repository commit,
 task, expected result, observed result, and whether the cause was mechanical,
