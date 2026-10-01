@@ -35,8 +35,10 @@ defmodule GenAgentServer.Profiles do
 
   defp parse_profile!(%{"name" => name, "cwd" => cwd, "providers" => providers} = entry, base)
        when is_binary(name) and is_binary(cwd) and is_list(providers) do
-    unless name != "" and not String.contains?(name, "/") do
-      raise ArgumentError, "profile name must be non-empty and contain no slash"
+    unless name != "" and not String.contains?(name, "/") and
+             not String.match?(name, ~r/[\x00-\x1F\x7F]/u) do
+      raise ArgumentError,
+            "profile name must be non-empty and contain no slash or control characters"
     end
 
     cwd = Path.expand(cwd, base)
