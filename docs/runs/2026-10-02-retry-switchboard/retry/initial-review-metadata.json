@@ -1,0 +1,11 @@
+{
+  "source": "first handoff terminal summary printed by control script",
+  "stage": "review",
+  "provider": "codex",
+  "requested_model": "gpt-6-astra",
+  "model": "gpt-6-astra",
+  "session_id": "01a0fbaf-4844-72f2-92c6-9ffac3b1162a",
+  "elapsed_ms": 75091,
+  "usage": {"input_tokens": 213135, "output_tokens": 1468, "cached_input_tokens": 166400},
+  "verdict": "REQUEST CHANGES"
+}

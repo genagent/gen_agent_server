@@ -1,0 +1,10 @@
+{
+  "source": "first handoff terminal summary printed by control script",
+  "stage": "implement",
+  "provider": "claude",
+  "requested_model": "sonnet",
+  "model": "claude-sonnet-5-5",
+  "session_id": "5ca63d77-b03c-4260-aef9-2d54bd4ae7fe",
+  "elapsed_ms": 100091,
+  "usage": {"input_tokens": 26, "output_tokens": 16015}
+}

@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_237_switchboard",
+  "issue": "/tmp/gen_agent_issue_237.md",
+  "instructions": "/tmp/gen_agent_issue_237_notes.md",
+  "out": "/tmp/gen_agent_issue_237_handoff",
+  "timeout_ms": 1800000,
+  "stages": {
+    "triage": {"provider": "claude", "model": "opus"},
+    "implement": {"provider": "codex", "model": "gpt-6-astra"},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}

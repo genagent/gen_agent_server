@@ -68,13 +68,22 @@ while host validation caught one strict Credo warning, so these gates also
 need separate result fields.
 
 The [#245 Workspace run](runs/2026-10-02-workspace-guide/README.md) timed out
-mid-implementation with a useful diff but no saved triage or implementer text:
-At that run, `issue_handoff.exs` wrote all stage artifacts only after review
+mid-implementation with a useful diff but no saved triage or implementer text.
+At that time, `issue_handoff.exs` wrote all stage artifacts only after review
 completed. It now saves each successful stage before starting the next and
-records a failed-stage outcome. The caller validated the diff and ran `review_only`, whose summary explicitly
-marks the missing stages unavailable. A control module should persist each
+records a failed-stage outcome. The caller validated the diff and ran
+`review_only`, whose summary explicitly marks the missing stages unavailable.
+A control module should persist each
 completed stage at its boundary and retain a terminal timeout or failed-stage
 record; recovery should reuse the checkout without fabricating lost outputs.
+
+The [#241/#237 runs](runs/2026-10-02-retry-switchboard/README.md) confirmed
+the new stage-boundary files appeared while later stages were active. They
+also exposed a second retention gap: `revise` archives the old review but
+overwrites the implementer report and metadata. A high-level workflow result
+should retain every stage attempt, including revisions and re-reviews, with
+its own model, session, timing, and verdict instead of replacing the prior
+attempt. Keep the host's tests and PR decision as separate gates.
 
 The [#243 Checkpointer run](runs/2026-10-02-checkpointer-guide/README.md)
 shows why an approving review and a passing host test should be distinct

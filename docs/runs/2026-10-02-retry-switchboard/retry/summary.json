@@ -1,0 +1,46 @@
+{
+  "instance": "handoff/6210",
+  "project": "/tmp/gen_agent_issue_241_retry",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 168448,
+        "input_tokens": 198292,
+        "output_tokens": 1116
+      },
+      "session_id": "01a0fbb8-aa85-7ec2-9029-f0eebf3a307d",
+      "provider": "codex",
+      "elapsed_ms": 68662,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "e9920af60623f16eb00f2edf88f5e949cfd2a9d9",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "guides/patterns/retry.md",
+    "test/guides/retry_test.exs"
+  ],
+  "untracked_files": []
+}
