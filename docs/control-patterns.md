@@ -194,3 +194,12 @@ tests identified two distinct stale assertions. A control API should retain
 probe evidence, raw-provider versus normalized expectations, review findings,
 and host validation separately so a passed model stage cannot stand in for a
 measured provider contract or a passing suite.
+
+The [work-machine MCP probe](runs/2026-10-02-work-machine-mcp/README.md)
+separated server capability from client permission policy. Codex discovered
+the tool but denied its first call in a non-interactive run until the caller
+explicitly approved the bounded Echo tools; Claude used an isolated config
+and tool allowlist. A future control layer should record both the server's
+allowlist and each host's tool policy. It cannot treat separate stdio MCP
+connections as one shared instance: each starts a VM with its own invocation
+IDs and result store.
