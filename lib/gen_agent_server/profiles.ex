@@ -6,12 +6,6 @@ defmodule GenAgentServer.Profiles do
   and invocation results, even when two profiles use the same provider.
   """
 
-  @backends %{
-    "echo" => GenAgentEnsemble.Backends.Echo,
-    "claude" => GenAgent.Backends.Claude,
-    "codex" => GenAgent.Backends.Codex
-  }
-
   def load!(path) when is_binary(path) do
     path = Path.expand(path)
     document = path |> File.read!() |> Jason.decode!()
@@ -47,7 +41,7 @@ defmodule GenAgentServer.Profiles do
       raise ArgumentError, "profile #{name} cwd is not a directory: #{cwd}"
     end
 
-    unless providers != [] and Enum.all?(providers, &Map.has_key?(@backends, &1)) do
+    unless providers != [] and Enum.all?(providers, &GenAgentServer.Providers.known?/1) do
       raise ArgumentError, "profile #{name} must list known providers: echo, claude, codex"
     end
 
@@ -80,28 +74,15 @@ defmodule GenAgentServer.Profiles do
       raise ArgumentError, "profile #{name} sets claude_permission_mode without claude"
     end
 
-    codex_sandbox = if codex_sandbox == "read_only", do: :read_only, else: :workspace_write
-    claude_permission = if claude_permission == "plan", do: :plan, else: :accept_edits
+    provider_opts = [
+      cwd: cwd,
+      codex_sandbox: String.to_existing_atom(codex_sandbox),
+      claude_permission_mode: String.to_existing_atom(claude_permission)
+    ]
 
     agents =
       Enum.map(providers, fn provider ->
-        opts =
-          case provider do
-            "echo" ->
-              [backend: @backends[provider]]
-
-            "claude" ->
-              [backend: @backends[provider], cwd: cwd, permission_mode: claude_permission]
-
-            "codex" ->
-              [
-                backend: @backends[provider],
-                cwd: cwd,
-                sandbox: codex_sandbox,
-                approval_policy: :never
-              ]
-          end
-
+        {:ok, opts} = GenAgentServer.Providers.backend_opts(provider, provider_opts)
         {provider, GenAgentEnsemble.Agents.Simple, opts}
       end)
 

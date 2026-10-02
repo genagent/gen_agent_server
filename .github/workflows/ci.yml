@@ -15,6 +15,9 @@ jobs:
           elixir-version: "1.20"
           otp-version: "29"
       - run: mix deps.get
+      - run: |
+          MIX_QUIET=1 mix gen_agent_server.ops instances > /tmp/gen_agent_server_ops.json
+          python3 -c 'import json; assert "server/default" in json.load(open("/tmp/gen_agent_server_ops.json"))["instances"]'
       - run: mix compile --warnings-as-errors
       - run: mix format --check-formatted
       - run: mix test

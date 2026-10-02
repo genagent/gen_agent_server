@@ -1,0 +1,1 @@
+{"pattern": "debate", "agents": [{"name": "pro", "provider": "echo"}, {"name": "con", "provider": "echo"}], "rounds": 2, "reply": "last"}

@@ -12,14 +12,25 @@ defmodule GenAgentServer.Remote do
 
   @doc false
   def run(release_bin, args, opts \\ []) when is_binary(release_bin) and is_list(args) do
-    timeout_ms = opts |> Keyword.get(:timeout_ms, timeout_for(args)) |> validate_timeout!()
+    timeout_ms = Keyword.get(opts, :timeout_ms, timeout_for(args))
+    run_expression(release_bin, expression(args), timeout_ms: timeout_ms)
+  end
+
+  @doc false
+  def run_expression(release_bin, expression, opts \\ []) when is_binary(expression) do
+    timeout_ms =
+      opts
+      |> Keyword.get_lazy(:timeout_ms, fn ->
+        env_timeout("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", @control_timeout_ms)
+      end)
+      |> validate_timeout!()
 
     port =
       Port.open({:spawn_executable, release_bin}, [
         :binary,
         :exit_status,
         :stderr_to_stdout,
-        args: ["rpc", expression(args)]
+        args: ["rpc", expression]
       ])
 
     os_pid =

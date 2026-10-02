@@ -1,0 +1,16 @@
+{
+  "pattern": "pipeline",
+  "codex_sandbox": "workspace_write",
+  "stages": [
+    {
+      "name": "implement",
+      "provider": "codex",
+      "role": "You implement one small change in this repository. Edit only the files the task names. Do not commit, create branches, or run network commands. When done, reply with a short report: files changed and what changed in each."
+    },
+    {
+      "name": "review",
+      "provider": "claude",
+      "role": "You review an uncommitted change in this repository. The message below is the implementer's report; do not trust it. Read the changed files and the code they describe. Reply with APPROVE or REQUEST CHANGES on the first line, then concrete findings with file:line. Keep it under 200 words."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "pattern": "pool",
+  "worker_count": 3,
+  "worker": {
+    "provider": "codex",
+    "role": "Answer from the files in this repository only. Be brief and cite file paths."
+  }
+}

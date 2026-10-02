@@ -1,0 +1,15 @@
+{
+  "pattern": "supervisor",
+  "decomposer": "numbered",
+  "max_subtasks": 4,
+  "coordinator": {
+    "name": "planner",
+    "provider": "claude",
+    "role": "You plan work for parallel workers. Reply with only a numbered list of independent subtasks, one per line, each fully self-contained (name the exact files). No other text."
+  },
+  "worker": {
+    "name": "auditor",
+    "provider": "codex",
+    "role": "You audit documentation against code in this repository. Do not edit files. Report only concrete mismatches with file:line on both sides, or say NO MISMATCHES. Keep it under 150 words. Do not narrate what you are about to do."
+  }
+}

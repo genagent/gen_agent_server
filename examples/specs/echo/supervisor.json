@@ -1,0 +1,1 @@
+{"pattern": "supervisor", "coordinator": {"provider": "echo"}, "worker": {"provider": "echo"}, "decomposer": "numbered", "max_subtasks": 3}

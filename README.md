@@ -201,6 +201,27 @@ Use `mix gen_agent_server.remote invoke echo "hello"` and then
 separate shell commands. The local `mix gen_agent_server` task starts a fresh
 VM, so its `invoke` and `result` commands are intentionally unavailable.
 
+To run an Ensemble pattern from a JSON spec, use `gen_agent_server.run`. The
+included Echo specs are safe to try without a CLI provider:
+
+```sh
+mix gen_agent_server.run examples/specs/echo/pool.json \
+  --prompt "Review one file" --prompt "Review another" --output report.json
+```
+
+`mix gen_agent_server.ops` lists the typed operations available to scripts and
+future MCP adapters. `--remote` runs an operation in the release above, where
+invocation results persist across commands. Set `MIX_QUIET=1` when parsing
+stdout so a first-time Mix compile does not prefix the JSON with build notices:
+
+```sh
+MIX_QUIET=1 mix gen_agent_server.ops patterns
+MIX_QUIET=1 mix gen_agent_server.ops invoke --agent echo --prompt "hello" --remote
+MIX_QUIET=1 mix gen_agent_server.ops result --id INVOCATION_ID --remote
+MIX_QUIET=1 mix gen_agent_server.ops run_pattern \
+  --spec @examples/specs/echo/pool.json --prompts "Check a claim" --remote
+```
+
 Set `GEN_AGENT_SERVER_RELEASE_BIN` if the release binary lives elsewhere.
 The release's `rpc` command remains available for direct Elixir calls.
 

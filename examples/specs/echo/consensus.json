@@ -1,0 +1,1 @@
+{"pattern": "consensus", "agents": [{"provider": "echo"}, {"provider": "echo"}, {"provider": "echo"}], "verdicts": ["approve", "reject"], "threshold": "majority", "rounds": 2}
