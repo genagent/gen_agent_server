@@ -31,9 +31,10 @@ iex> {:ok, id} = GenAgentServer.invoke("codex", "Find the test entry points")
 iex> GenAgentServer.result(id)
 ```
 
-The Claude backend uses plan permission mode and Codex uses a read-only
-sandbox with approvals disabled. Both keep their native project instructions
-and separate provider sessions. `mix gen_agent_server ask PROVIDER PROMPT`
+The Claude backend uses plan permission mode. Codex uses a read-only sandbox
+with approvals disabled and ignores the host user's Codex configuration by
+default. Both keep their native project instructions and separate provider
+sessions. `mix gen_agent_server ask PROVIDER PROMPT`
 starts a fresh application for a single request; use IEx for a persistent
 multi-turn session.
 
@@ -47,7 +48,8 @@ store. Paths in `cwd` are relative to the JSON file; absolute paths also work.
 {
   "profiles": [
     {"name": "home", "cwd": "/path/to/home/project", "providers": ["claude", "codex"]},
-    {"name": "work", "cwd": "/path/to/work/project", "providers": ["codex"]}
+    {"name": "work", "cwd": "/path/to/work/project", "providers": ["codex"],
+     "codex_user_config": "inherit"}
   ]
 }
 ```
@@ -89,6 +91,14 @@ permission mode. These are provider controls, not a server-enforced file
 allowlist. Use a separate worktree for coding tasks and review changes before
 merging. The server rejects broader Codex sandbox modes and Claude's bypass
 mode from profile configuration.
+
+`"codex_user_config"` accepts `"ignore"` (the default) or `"inherit"`.
+Ignoring passes the Codex CLI's `--ignore-user-config` option on fresh and
+resumed turns, avoiding host-specific MCP servers, model defaults, and other
+settings in the operator's user configuration. `"inherit"` leaves those
+settings available to the CLI. The installed Codex CLI still handles its own
+authentication; this setting does not provide credentials. Pattern specs also
+accept `"codex_user_config"` with the same choices.
 
 ## Optional scheduled turns
 

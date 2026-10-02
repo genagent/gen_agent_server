@@ -253,6 +253,28 @@ defmodule GenAgentServerTest do
     assert claude_opts[:permission_mode] == :accept_edits
     assert codex_opts[:sandbox] == :workspace_write
     assert codex_opts[:approval_policy] == :never
+    assert codex_opts[:ignore_user_config] == true
+
+    File.write!(
+      path,
+      Jason.encode!(%{profiles: [Map.put(profile, :codex_user_config, "inherit")]})
+    )
+
+    assert [{"editing", inherited_agents}] = GenAgentServer.Profiles.load!(path)
+
+    assert {"codex", _, inherited_opts} =
+             Enum.find(inherited_agents, &(elem(&1, 0) == "codex"))
+
+    refute Keyword.has_key?(inherited_opts, :ignore_user_config)
+
+    File.write!(
+      path,
+      Jason.encode!(%{profiles: [Map.put(profile, :codex_user_config, "unknown")]})
+    )
+
+    assert_raise ArgumentError, ~r/invalid codex_user_config/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
 
     File.write!(
       path,
@@ -260,6 +282,19 @@ defmodule GenAgentServerTest do
     )
 
     assert_raise ArgumentError, ~r/invalid codex_sandbox/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        profiles: [
+          %{name: "claude-only", cwd: ".", providers: ["claude"], codex_user_config: "inherit"}
+        ]
+      })
+    )
+
+    assert_raise ArgumentError, ~r/sets codex_user_config without codex/, fn ->
       GenAgentServer.Profiles.load!(path)
     end
   end

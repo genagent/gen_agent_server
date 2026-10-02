@@ -35,9 +35,20 @@ agents =
 
     backend_opts =
       case provider do
-        "echo" -> [backend: backend]
-        "claude" -> [backend: backend, cwd: cwd, permission_mode: :plan]
-        "codex" -> [backend: backend, cwd: cwd, sandbox: :read_only, approval_policy: :never]
+        "echo" ->
+          [backend: backend]
+
+        "claude" ->
+          [backend: backend, cwd: cwd, permission_mode: :plan]
+
+        "codex" ->
+          [
+            backend: backend,
+            cwd: cwd,
+            sandbox: :read_only,
+            approval_policy: :never,
+            ignore_user_config: true
+          ]
       end
 
     {provider, GenAgentEnsemble.Agents.Simple, backend_opts}

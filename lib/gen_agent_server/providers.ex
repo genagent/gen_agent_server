@@ -4,8 +4,8 @@ defmodule GenAgentServer.Providers do
   each.
 
   Claude defaults to plan permission mode and Codex to a read-only sandbox with
-  approvals disabled. Callers can opt in to edit modes with the same narrow
-  choices that profiles allow.
+  approvals disabled and the host user's config ignored. Callers can opt in to
+  edit modes or config inheritance with the same choices that profiles allow.
   """
 
   @backends %{
@@ -27,6 +27,7 @@ defmodule GenAgentServer.Providers do
     * `:cwd` -- project directory for the CLI backends (required for `claude`
       and `codex`).
     * `:codex_sandbox` -- `:read_only` (default) or `:workspace_write`.
+    * `:codex_user_config` -- `:ignore` (default) or `:inherit`.
     * `:claude_permission_mode` -- `:plan` (default) or `:accept_edits`.
     * `:model` -- model name passed to the CLI backends.
   """
@@ -43,8 +44,10 @@ defmodule GenAgentServer.Providers do
 
   def backend_opts("codex", opts) do
     with {:ok, cwd} <- fetch_cwd(opts),
-         {:ok, sandbox} <- choice(opts, :codex_sandbox, [:read_only, :workspace_write]) do
+         {:ok, sandbox} <- choice(opts, :codex_sandbox, [:read_only, :workspace_write]),
+         {:ok, user_config} <- choice(opts, :codex_user_config, [:ignore, :inherit]) do
       base = [backend: @backends["codex"], cwd: cwd, sandbox: sandbox, approval_policy: :never]
+      base = if user_config == :ignore, do: base ++ [ignore_user_config: true], else: base
       {:ok, maybe_model(base, opts)}
     end
   end

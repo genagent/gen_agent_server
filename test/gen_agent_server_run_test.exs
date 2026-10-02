@@ -15,6 +15,16 @@ defmodule GenAgentServer.RunTest do
       assert opts[:sandbox] == :read_only and opts[:approval_policy] == :never and
                opts[:model] == "m"
 
+      assert opts[:ignore_user_config] == true
+
+      assert {:ok, inherited} =
+               Providers.backend_opts("codex",
+                 cwd: File.cwd!(),
+                 codex_user_config: :inherit
+               )
+
+      refute Keyword.has_key?(inherited, :ignore_user_config)
+
       assert {:ok, opts} = Providers.backend_opts("claude", cwd: File.cwd!())
       assert opts[:permission_mode] == :plan
 
@@ -22,6 +32,12 @@ defmodule GenAgentServer.RunTest do
                Providers.backend_opts("codex",
                  cwd: File.cwd!(),
                  codex_sandbox: :danger_full_access
+               )
+
+      assert {:error, {:invalid_option, :codex_user_config, :unknown}} =
+               Providers.backend_opts("codex",
+                 cwd: File.cwd!(),
+                 codex_user_config: :unknown
                )
 
       assert {:error, {:unknown_provider, "gemini"}} = Providers.backend_opts("gemini")
@@ -95,6 +111,7 @@ defmodule GenAgentServer.RunTest do
                PatternSpec.parse(codex, cwd: File.cwd!())
 
       assert opts[:sandbox] == :read_only
+      assert opts[:ignore_user_config] == true
 
       assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
                PatternSpec.parse(Map.put(codex, "codex_sandbox", "workspace_write"),
@@ -102,6 +119,18 @@ defmodule GenAgentServer.RunTest do
                )
 
       assert opts[:sandbox] == :workspace_write
+
+      assert {:ok, %{strategy_opts: [agent: {_, _, inherited}]}} =
+               PatternSpec.parse(Map.put(codex, "codex_user_config", "inherit"),
+                 cwd: File.cwd!()
+               )
+
+      refute Keyword.has_key?(inherited, :ignore_user_config)
+
+      assert {:error, {:invalid, "codex_user_config", "unknown"}} =
+               PatternSpec.parse(Map.put(codex, "codex_user_config", "unknown"),
+                 cwd: File.cwd!()
+               )
 
       assert {:error, {:invalid, "codex_sandbox", "danger_full_access"}} =
                PatternSpec.parse(Map.put(codex, "codex_sandbox", "danger_full_access"),
