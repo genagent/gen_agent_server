@@ -1,0 +1,51 @@
+{
+  "instance": "handoff/3204",
+  "project": "/tmp/gen_agent_issue_243_checkpointer",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 16432
+      },
+      "session_id": "adf4187c-7579-4d07-b4ed-ba1b6af01b2f",
+      "provider": "claude",
+      "elapsed_ms": 106972,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 134784,
+        "input_tokens": 168329,
+        "output_tokens": 956
+      },
+      "session_id": "01a0fb8c-5d9b-79c1-b965-34029cf2a4fa",
+      "provider": "codex",
+      "elapsed_ms": 57468,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 63744,
+        "input_tokens": 85872,
+        "output_tokens": 1194
+      },
+      "session_id": "01a0fb89-c0ef-7bb2-8e4d-5b4c4198b753",
+      "provider": "codex",
+      "elapsed_ms": 64096,
+      "stage": "triage",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "22de093618be8a02b9cca6fb6efcc562097c81e8",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "guides/patterns/checkpointer.md",
+    "test/scenarios/checkpointer_scenario_test.exs"
+  ],
+  "untracked_files": []
+}

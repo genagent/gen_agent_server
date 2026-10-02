@@ -67,6 +67,15 @@ silently substitute a model. The successful review could not execute tests,
 while host validation caught one strict Credo warning, so these gates also
 need separate result fields.
 
+The [#243 Checkpointer run](runs/2026-10-02-checkpointer-guide/README.md)
+shows why an approving review and a passing host test should be distinct
+stage results. Claude's implementation and Codex's review both checked the
+protocol from source but could not run the new tests. The caller executed the
+guide's compiled code, the full root suite, and quality gates before PR
+action. The issue-specific review token and failure retry are application
+behavior; the server's reusable control code supplied isolation, bounded
+stages, captured artifacts, and cleanup.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for
