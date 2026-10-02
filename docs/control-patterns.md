@@ -48,6 +48,15 @@ metadata consistently. Claude plan mode again substituted Sonnet for a
 requested Haiku model, so the recorded actual model matters more than a route
 declared in a prompt or config.
 
+The [#259 streaming run](runs/2026-10-02-ensemble-stream/README.md) repeated
+the read-only Solo design plus staged handoff pattern on a protocol boundary.
+The caller checked the design against source before the write stage, which
+corrected an early-event timing inference. The runner captured model/session
+metadata and stopped its named instance; the caller owned package checks,
+draft PR status, and the core Hex release gate. A future control API can expose
+those as separate stage, validation, and release states without making a model
+verdict authoritative.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for

@@ -1,0 +1,9 @@
+{
+  "provider": "claude",
+  "requested_model": "opus",
+  "actual_model": "claude-opus-5-5",
+  "session_id": "4f9dde10-921e-4df8-abf6-61a2469c21f6",
+  "elapsed_ms": 173542,
+  "instance": "issue259-stream-design-3330",
+  "method": "GenAgentServer.Run.run/3 Solo; session ID and actual model recovered from Claude CLI JSONL"
+}
