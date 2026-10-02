@@ -1,0 +1,52 @@
+{
+  "instance": "handoff/3909",
+  "project": "/tmp/gen_agent_issue_249",
+  "stages": {
+    "implement": {
+      "usage": {
+        "cached_input_tokens": 99584,
+        "input_tokens": 116518,
+        "output_tokens": 2855
+      },
+      "session_id": "01a0fb03-81b9-7172-8b65-e3443b30f2e2",
+      "provider": "codex",
+      "elapsed_ms": 104879,
+      "stage": "implement",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 4,
+        "output_tokens": 2171
+      },
+      "session_id": "62bde5b4-cf4b-4fe0-b24c-dee712fab127",
+      "provider": "claude",
+      "elapsed_ms": 23296,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 97024,
+        "input_tokens": 127256,
+        "output_tokens": 1340
+      },
+      "session_id": "01a0fb02-b7fd-7bf1-9d78-f626b0131209",
+      "provider": "codex",
+      "elapsed_ms": 52073,
+      "stage": "triage",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "26e249613f0da0c33243e9a87aef47a11c7c9fb1",
+  "verdict": "APPROVE",
+  "changed_files": [
+    ".github/workflows/pr-title.yml",
+    "scripts/check-pr-title.py",
+    "scripts/test_pr_title.py"
+  ],
+  "untracked_files": []
+}

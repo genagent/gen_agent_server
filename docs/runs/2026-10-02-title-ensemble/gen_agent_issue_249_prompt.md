@@ -1,0 +1,3 @@
+# genagent/gen_agent#249: check conventional-commit PR titles
+
+The repository squash-merges with the PR title as the commit subject, but CI does not validate title format. Release-please ignored merged commits with nonconventional subjects. Add a PR-only validation that accepts Conventional Commit titles (including scoped types and breaking `!`), rejects malformed titles with actionable feedback, and does not block ordinary pushes to main. Keep the change small and deterministic; account for release-please generated release PRs. Check the current repository workflows and titles before editing. The issue's historical claim about release-please parse errors is not independently verified and need not be solved here.

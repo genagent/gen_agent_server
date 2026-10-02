@@ -24,6 +24,13 @@ batch work; use an instance-scoped `invoke`/`result` loop when later clients
 need to read the same result. Keep source paths and tests as evidence for code
 findings rather than treating a worker's verdict as proof.
 
+The [#249/#259 issue runs](runs/2026-10-02-title-ensemble/README.md) add two
+control details: a CLI backend may fail before any model event if the caller's
+host sandbox blocks its session-state directory, so startup failure must be
+recorded separately from a model verdict; and a staged issue can produce a
+verified first slice while its parent issue remains open for explicit code
+dependencies. These are host workflow states, not extra prompt instructions.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for
