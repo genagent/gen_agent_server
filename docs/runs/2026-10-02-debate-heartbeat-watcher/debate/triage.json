@@ -1,0 +1,13 @@
+{
+  "usage": {
+    "cached_input_tokens": 93952,
+    "input_tokens": 112488,
+    "output_tokens": 1325
+  },
+  "session_id": "01a0fbc8-af12-7a60-aa01-dd3ad9de32a4",
+  "provider": "codex",
+  "elapsed_ms": 32348,
+  "stage": "triage",
+  "requested_model": "gpt-6-luna",
+  "model": "gpt-6-luna"
+}

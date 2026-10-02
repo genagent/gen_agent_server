@@ -94,6 +94,18 @@ action. The issue-specific review token and failure retry are application
 behavior; the server's reusable control code supplied isolation, bounded
 stages, captured artifacts, and cleanup.
 
+The [#238/#244 guide runs](runs/2026-10-02-debate-heartbeat-watcher/README.md)
+used two named handoffs concurrently and then several bounded review-only
+passes. Reviewers found bugs that passing guide tests initially missed: a
+repeated Debate run could consume a previous completion message, and a ticker
+could address a restarted agent between a PID check and a name-based notify.
+The caller added focused regression tests and reran package gates. Each
+`review_only` pass overwrote `review.md` and `review.json`, so the caller copied
+them to round files before the next pass. `revise` similarly overwrote the
+earlier implementation report. The optional control API should keep a
+monotonic stage/round history and explicit host-validation results; choosing
+which reviewer findings are blocking remains a caller decision.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for

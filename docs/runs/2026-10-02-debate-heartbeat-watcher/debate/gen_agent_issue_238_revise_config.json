@@ -1,0 +1,22 @@
+{
+  "project": "/tmp/gen_agent_issue_238_debate",
+  "issue": "/tmp/gen_agent_issue_238.md",
+  "out": "/tmp/gen_agent_issue_238_handoff",
+  "timeout_ms": 1500000,
+  "stages": {
+    "triage": {
+      "provider": "codex",
+      "model": "gpt-6-luna"
+    },
+    "implement": {
+      "provider": "claude",
+      "model": "sonnet"
+    },
+    "review": {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    }
+  },
+  "instructions": "/tmp/gen_agent_issue_238_notes.md",
+  "revise": true
+}

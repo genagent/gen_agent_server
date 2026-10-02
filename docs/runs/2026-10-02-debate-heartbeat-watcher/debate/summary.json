@@ -1,0 +1,48 @@
+{
+  "instance": "handoff/5442",
+  "project": "/tmp/gen_agent_issue_238_debate",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 2877
+      },
+      "session_id": "5feeb20e-b2d4-41d0-a166-e743d1bee987",
+      "provider": "claude",
+      "elapsed_ms": 22399,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 108583,
+        "output_tokens": 608,
+        "cached_input_tokens": 84992
+      },
+      "session_id": "01a0fbce-7a51-7b22-860f-980637fa338a",
+      "provider": "codex",
+      "elapsed_ms": 18224,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "26bd542b27d35a84d9144ba34162025eedc616e9",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "guides/patterns/debate.md",
+    "test/guides/debate_test.exs"
+  ],
+  "untracked_files": []
+}
