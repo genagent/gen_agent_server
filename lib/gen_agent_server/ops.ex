@@ -6,7 +6,7 @@ defmodule GenAgentServer.Ops do
   `{:error, %{code: String.t(), message: String.t()}}`, where `data` contains
   only maps, lists, strings, numbers, booleans, and nil. The CLI
   (`mix gen_agent_server.ops`), the release RPC path (`GenAgentServer.Ops.Remote`),
-  and a future MCP adapter all call `call/2`, so each operation is defined once.
+  and the MCP adapter (`GenAgentServer.MCP`) all call `call/3`, so each operation is defined once.
 
   The catalogue holds no state of its own. Every operation reads or changes the
   live instances, Ensemble sessions, and scheduler, so the direct Elixir API
@@ -53,7 +53,9 @@ defmodule GenAgentServer.Ops do
         [instance(), req("agent", :string, "Route name"), req("prompt", :string, "Prompt text")],
         fn a ->
           with {:ok, id} <-
-                 GenAgentServer.invoke(a["instance"], a["agent"], a["prompt"], source: :api),
+                 GenAgentServer.invoke(a["instance"], a["agent"], a["prompt"],
+                   source: Map.get(a, :source, :api)
+                 ),
                do: {:ok, %{instance: a["instance"], id: id}}
         end
       ),
@@ -75,7 +77,8 @@ defmodule GenAgentServer.Ops do
           opt("timeout_ms", :integer, "Stop waiting after this many milliseconds")
         ],
         fn a ->
-          opts = if a["timeout_ms"], do: [timeout: a["timeout_ms"]], else: []
+          opts = [source: Map.get(a, :source, :api)]
+          opts = if a["timeout_ms"], do: [{:timeout, a["timeout_ms"]} | opts], else: opts
 
           case GenAgentServer.ask_instance(a["instance"], a["agent"], a["prompt"], opts) do
             {:ok, response} -> {:ok, Map.put(response_data(response), :status, "completed")}
@@ -172,12 +175,20 @@ defmodule GenAgentServer.Ops do
     }
   end
 
-  @doc "Validate `args` and run the operation `name`."
-  @spec call(String.t(), map()) ::
+  @doc """
+  Validate `args` and run the operation `name`.
+
+  `opts` is trusted caller context, never client input. `:source` sets the
+  telemetry source of `invoke` and `ask` (default `:api`).
+  """
+  @spec call(String.t(), map(), keyword()) ::
           {:ok, term()} | {:error, %{code: String.t(), message: String.t()}}
-  def call(name, args \\ %{}) when is_binary(name) and is_map(args) do
+  def call(name, args \\ %{}, opts \\ [])
+      when is_binary(name) and is_map(args) and is_list(opts) do
     with {:ok, op} <- fetch(name),
          {:ok, args} <- validate(op, args) do
+      args = Map.put(args, :source, Keyword.get(opts, :source, :api))
+
       case op.handler.(args) do
         {:ok, data} -> {:ok, data}
         {:error, %{code: _, message: _} = e} -> {:error, e}

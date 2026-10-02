@@ -1,0 +1,276 @@
+defmodule GenAgentServer.MCPTest do
+  use ExUnit.Case, async: false
+
+  alias GenAgentServer.{MCP, Ops}
+
+  @tool_names ~w(agents ask instances invoke result status)
+
+  setup do
+    {:ok, client} = Snodo.Client.direct(MCP.Server.runtime())
+    %{client: client}
+  end
+
+  test "the catalogue is exactly the allowlisted operations", %{client: client} do
+    assert {:ok, listed} = Snodo.Client.list_tools(client)
+    tools = plain(listed)
+    assert tools |> Enum.map(&field(&1, "name", :name)) |> Enum.sort() == @tool_names
+    assert Enum.sort(MCP.tools()) == @tool_names
+
+    for tool <- tools do
+      op = Ops.fetch(field(tool, "name", :name)) |> elem(1)
+      assert field(tool, "description", :description) == op.summary
+      assert field(tool, "inputSchema", :input_schema) == Ops.json_schema(op)
+    end
+
+    refute Enum.any?(~w(run_pattern stop_instance run_job jobs patterns), &(&1 in @tool_names))
+  end
+
+  test "discovers instances and routes", %{client: client} do
+    default = GenAgentServer.session_name()
+    assert %{"instances" => instances} = ok!(client, "instances", %{})
+    assert default in instances
+
+    assert %{"agents" => agents} = ok!(client, "agents", %{})
+    assert "echo" in agents
+    assert %{"strategy" => "GenAgentEnsemble.Strategies.Switchboard"} = ok!(client, "status", %{})
+  end
+
+  test "invokes work and reads the same result repeatedly", %{client: client} do
+    assert %{"id" => id} = ok!(client, "invoke", %{"agent" => "echo", "prompt" => "later"})
+
+    assert eventually(fn ->
+             match?(%{"status" => "completed"}, ok!(client, "result", %{"id" => id}))
+           end)
+
+    first = ok!(client, "result", %{"id" => id})
+    assert first["text"] == "echo: later"
+    assert ok!(client, "result", %{"id" => id}) == first
+
+    assert %{"status" => "completed", "text" => "echo: hi"} =
+             ok!(client, "ask", %{"agent" => "echo", "prompt" => "hi"})
+  end
+
+  test "unknown routes, instances, and ids are tool errors", %{client: client} do
+    assert error!(client, "ask", %{"agent" => "nobody", "prompt" => "x"}) =~ "unknown_agent"
+    assert error!(client, "invoke", %{"agent" => "nobody", "prompt" => "x"}) =~ "unknown_agent"
+    assert error!(client, "agents", %{"instance" => "nope"}) =~ "instance_not_found"
+    assert error!(client, "status", %{"instance" => "nope"}) =~ "instance_not_found"
+    assert error!(client, "result", %{"id" => "inv-missing"}) =~ "not_found"
+
+    assert error!(client, "invoke", %{"instance" => "nope", "agent" => "echo", "prompt" => "x"}) =~
+             "instance_not_found"
+  end
+
+  test "arguments outside the catalogue schema are rejected", %{client: client} do
+    # Snodo rejects missing required arguments before Ops is called.
+    assert error!(client, "invoke", %{"agent" => "echo"}) =~ "Missing required arguments: prompt"
+    assert error!(client, "instances", %{"bogus" => 1}) =~ "invalid_args"
+
+    assert error!(client, "ask", %{"agent" => "echo", "prompt" => "x", "source" => "api"}) =~
+             "invalid_args"
+  end
+
+  test "operations outside the allowlist are not callable", %{client: client} do
+    for name <- ~w(run_pattern stop_instance run_job jobs patterns) do
+      case Snodo.Client.call_tool(client, name, %{"instance" => "nope"}) do
+        {:error, _} -> :ok
+        {:ok, result} -> assert field(plain(result), "isError", :is_error) == true
+      end
+    end
+
+    assert GenAgentServer.session_name() in GenAgentServer.instances()
+  end
+
+  test "two instances keep independent routes and results", %{client: client} do
+    suffix = System.unique_integer([:positive])
+    [one, two] = for n <- ["mcp-one-#{suffix}", "mcp-two-#{suffix}"], do: n
+
+    assert {:ok, _} =
+             GenAgentServer.start_instance(one, [
+               {"alpha", GenAgentEnsemble.Agents.Simple,
+                [backend: GenAgentEnsemble.Backends.Echo]}
+             ])
+
+    assert {:ok, _} =
+             GenAgentServer.start_instance(two, [
+               {"beta", GenAgentEnsemble.Agents.Simple, [backend: GenAgentEnsemble.Backends.Echo]}
+             ])
+
+    on_exit(fn ->
+      GenAgentServer.stop_instance(one)
+      GenAgentServer.stop_instance(two)
+    end)
+
+    assert %{"instances" => instances} = ok!(client, "instances", %{})
+    assert one in instances and two in instances
+
+    assert %{"agents" => ["alpha"]} = ok!(client, "agents", %{"instance" => one})
+    assert %{"agents" => ["beta"]} = ok!(client, "agents", %{"instance" => two})
+
+    assert %{"id" => id_one} =
+             ok!(client, "invoke", %{"instance" => one, "agent" => "alpha", "prompt" => "one"})
+
+    assert %{"id" => id_two} =
+             ok!(client, "invoke", %{"instance" => two, "agent" => "beta", "prompt" => "two"})
+
+    assert eventually(fn ->
+             match?(
+               %{"status" => "completed"},
+               ok!(client, "result", %{"instance" => one, "id" => id_one})
+             ) and
+               match?(
+                 %{"status" => "completed"},
+                 ok!(client, "result", %{"instance" => two, "id" => id_two})
+               )
+           end)
+
+    assert %{"text" => "echo: one"} = ok!(client, "result", %{"instance" => one, "id" => id_one})
+    assert %{"text" => "echo: two"} = ok!(client, "result", %{"instance" => two, "id" => id_two})
+
+    assert error!(client, "result", %{"instance" => one, "id" => id_two}) =~ "not_found"
+
+    assert error!(client, "invoke", %{"instance" => one, "agent" => "beta", "prompt" => "x"}) =~
+             "unknown_agent"
+  end
+
+  describe "telemetry source" do
+    setup do
+      handler = "mcp-telemetry-#{System.unique_integer([:positive])}"
+      test = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:gen_agent_server, :invocation, :start],
+          fn _event, _measurements, metadata, _ -> send(test, {:start, metadata}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    test "MCP invoke and ask are :mcp; existing Ops callers stay :api", %{client: client} do
+      assert %{"id" => id} = ok!(client, "invoke", %{"agent" => "echo", "prompt" => "a"})
+      assert_receive {:start, %{invocation_id: ^id, source: :mcp}}
+
+      ok!(client, "ask", %{"agent" => "echo", "prompt" => "b"})
+      assert_receive {:start, %{source: :mcp}}
+
+      assert {:ok, %{id: api_id}} = Ops.call("invoke", %{"agent" => "echo", "prompt" => "c"})
+      assert_receive {:start, %{invocation_id: ^api_id, source: :api}}
+
+      assert {:ok, %{status: "completed"}} =
+               Ops.call("ask", %{"agent" => "echo", "prompt" => "d"})
+
+      assert_receive {:start, %{source: :api}}
+    end
+
+    test "callers cannot choose the source through arguments" do
+      assert {:error, %{code: "invalid_args"}} =
+               Ops.call("invoke", %{"agent" => "echo", "prompt" => "x", :source => :mcp})
+    end
+  end
+
+  describe "stdio transport" do
+    @describetag :stdio
+    @describetag timeout: 120_000
+
+    test "serves protocol-only stdout from a Mix checkout" do
+      mix = System.find_executable("mix") || flunk("mix not found on PATH")
+
+      port =
+        Port.open({:spawn_executable, mix}, [
+          :binary,
+          :exit_status,
+          {:line, 1_000_000},
+          {:args, ["gen_agent_server.mcp"]},
+          {:env, [{~c"MIX_ENV", ~c"test"}, {~c"MIX_QUIET", ~c"1"}]},
+          {:cd, File.cwd!()}
+        ])
+
+      send_message(port, %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => "2025-06-18",
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "0"}
+        }
+      })
+
+      assert %{"result" => %{"serverInfo" => %{"name" => "gen-agent-server"}}} =
+               read_response(port, 1)
+
+      send_message(port, %{"jsonrpc" => "2.0", "method" => "notifications/initialized"})
+      send_message(port, %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"})
+
+      assert %{"result" => %{"tools" => tools}} = read_response(port, 2)
+      assert tools |> Enum.map(& &1["name"]) |> Enum.sort() == @tool_names
+
+      send_message(port, %{
+        "jsonrpc" => "2.0",
+        "id" => 3,
+        "method" => "tools/call",
+        "params" => %{"name" => "ask", "arguments" => %{"agent" => "echo", "prompt" => "wire"}}
+      })
+
+      assert %{"result" => %{"structuredContent" => %{"text" => "echo: wire"}}} =
+               read_response(port, 3)
+
+      Port.close(port)
+    end
+  end
+
+  # -- helpers -----------------------------------------------------------------
+
+  defp send_message(port, message), do: Port.command(port, Jason.encode!(message) <> "\n")
+
+  # Every stdout line must be a JSON-RPC message; anything else fails the test.
+  defp read_response(port, id) do
+    receive do
+      {^port, {:data, {:eol, line}}} ->
+        message = Jason.decode!(line)
+        assert message["jsonrpc"] == "2.0", "non-protocol stdout: #{line}"
+        if message["id"] == id, do: message, else: read_response(port, id)
+
+      {^port, {:exit_status, status}} ->
+        flunk("MCP process exited with #{status}")
+    after
+      60_000 -> flunk("no response to request #{id}")
+    end
+  end
+
+  defp ok!(client, name, args) do
+    {:ok, result} = Snodo.Client.call_tool(client, name, args)
+    result = plain(result)
+    refute field(result, "isError", :is_error), "#{name} failed: #{inspect(result)}"
+    field(result, "structuredContent", :structured_content)
+  end
+
+  defp error!(client, name, args) do
+    {:ok, result} = Snodo.Client.call_tool(client, name, args)
+    result = plain(result)
+    assert field(result, "isError", :is_error) == true, "#{name} succeeded: #{inspect(result)}"
+
+    result
+    |> field("content", :content)
+    |> Enum.map_join(" ", &field(&1, "text", :text))
+  end
+
+  # Snodo results may be structs with snake_case keys or wire maps; accept both.
+  defp field(map, wire, atom), do: Map.get(map, wire, Map.get(map, atom))
+
+  defp plain(%_{} = struct), do: struct |> Map.from_struct() |> plain()
+  defp plain(map) when is_map(map), do: Map.new(map, fn {k, v} -> {k, plain(v)} end)
+  defp plain(list) when is_list(list), do: Enum.map(list, &plain/1)
+  defp plain(other), do: other
+
+  defp eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts == 0 -> false
+      true -> Process.sleep(10) && eventually(fun, attempts - 1)
+    end
+  end
+end

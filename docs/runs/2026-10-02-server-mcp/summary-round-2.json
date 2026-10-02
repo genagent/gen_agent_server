@@ -1,0 +1,54 @@
+{
+  "instance": "handoff/2243",
+  "project": "/tmp/gen_agent_server_mcp_010_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 28,
+        "output_tokens": 22562
+      },
+      "session_id": "7a07ca8d-0dbf-4565-b311-0b183d3da0f6",
+      "provider": "claude",
+      "elapsed_ms": 144516,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 235285,
+        "output_tokens": 1580,
+        "cached_input_tokens": 190208
+      },
+      "session_id": "01a0fcd4-6318-7ee2-a912-61078b3556f8",
+      "provider": "codex",
+      "elapsed_ms": 92987,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "022780a64770fcf6890bc4a21ef77430f4f45473",
+  "verdict": "REQUEST CHANGES",
+  "changed_files": [
+    "README.md",
+    "lib/gen_agent_server/mcp.ex",
+    "lib/gen_agent_server/mcp/server.ex",
+    "lib/gen_agent_server/mcp/tools.ex",
+    "lib/gen_agent_server/ops.ex",
+    "lib/mix/tasks/gen_agent_server.mcp.ex",
+    "mix.exs",
+    "test/gen_agent_server_mcp_test.exs"
+  ],
+  "untracked_files": []
+}

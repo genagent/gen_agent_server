@@ -228,7 +228,7 @@ mix gen_agent_server.run examples/specs/echo/pool.json \
 ```
 
 `mix gen_agent_server.ops` lists the typed operations available to scripts and
-future MCP adapters. `--remote` runs an operation in the release above, where
+the MCP adapter. `--remote` runs an operation in the release above, where
 invocation results persist across commands. Set `MIX_QUIET=1` when parsing
 stdout so a first-time Mix compile does not prefix the JSON with build notices:
 
@@ -243,7 +243,60 @@ MIX_QUIET=1 mix gen_agent_server.ops run_pattern \
 Set `GEN_AGENT_SERVER_RELEASE_BIN` if the release binary lives elsewhere.
 The release's `rpc` command remains available for direct Elixir calls.
 
-A network API, MCP adapter, and dashboard are follow-on layers.
+## MCP (stdio)
+
+`GenAgentServer.MCP` serves a local stdio MCP server for Claude, Codex, or any
+MCP client. It exposes six tools, each backed by the operation of the same name
+in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `result`,
+and `ask`. Nothing else is reachable, including `run_pattern`, `stop_instance`,
+jobs, and configuration. `invoke` and `ask` record telemetry source `:mcp`.
+
+The MCP process starts its own application, with its own instances and result
+store. Invocation IDs and results last for that MCP session and are not shared
+with a separately running release or `mix gen_agent_server.remote`. Providers
+come from the same environment variables as the rest of the server
+(`GEN_AGENT_SERVER_PROVIDERS`, `GEN_AGENT_SERVER_CWD`, `GEN_AGENT_SERVER_CONFIG`);
+the default is the model-free `echo` provider.
+
+Stdout carries only MCP protocol messages once the server starts. Logger output
+is moved to stderr, and the Mix task silences Mix's own notices.
+
+From a checkout, compile once, then register the command with your client:
+
+```sh
+mix deps.get && mix compile
+claude mcp add gen-agent-server -- \
+  sh -c 'cd /path/to/gen_agent_server && MIX_QUIET=1 exec mix gen_agent_server.mcp'
+```
+
+For clients configured with JSON, the server entry is:
+
+```json
+{
+  "command": "mix",
+  "args": ["gen_agent_server.mcp"],
+  "cwd": "/path/to/gen_agent_server",
+  "env": {"MIX_QUIET": "1"}
+}
+```
+
+From an OTP release, build it and point the client at the release script. The
+`eval` command runs the server in a fresh VM and exits when the client closes
+stdin:
+
+```sh
+MIX_ENV=prod mix release
+```
+
+```json
+{
+  "command": "/path/to/gen_agent_server/_build/prod/rel/gen_agent_server/bin/gen_agent_server",
+  "args": ["eval", "GenAgentServer.MCP.serve()"]
+}
+```
+
+A session-to-session mailbox, HTTP transport, and broader control operations
+are follow-on work, as is a dashboard.
 
 The [dogfooding log](docs/dogfooding.md) records bounded real tasks, observed
 issues, and the planned progression through Ensemble patterns.
@@ -279,9 +332,10 @@ An `ask` timeout or caller exit does not establish that an underlying provider
 process stopped; GenAgent's turn watchdog bounds active work. There is no
 durable admission, automatic retry, or cross-node result store yet.
 
-The app now has repeatable result reads for multiple clients. Individual
-turn cancellation remains to be defined in Ensemble before this API is
-exposed over MCP or used for broader unattended orchestration.
+The app has repeatable result reads for multiple clients. The stdio MCP
+surface exposes only submit, wait, and read operations. Individual turn
+cancellation remains to be defined in Ensemble before it is exposed over MCP or
+used for broader unattended orchestration.
 
 ## Telemetry
 
