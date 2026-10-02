@@ -1,0 +1,51 @@
+{
+  "instance": "handoff/6212",
+  "project": "/tmp/gen_agent_issue_206",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 129176,
+        "output_tokens": 1454,
+        "cached_input_tokens": 112128
+      },
+      "session_id": "01a0fb3e-311e-7e30-a490-1eba1de1fa7c",
+      "provider": "codex",
+      "elapsed_ms": 40025,
+      "stage": "implement",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 1842
+      },
+      "session_id": "1a494f92-787a-4007-b04b-027782775ee1",
+      "provider": "claude",
+      "elapsed_ms": 22155,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": {
+        "input_tokens": 14,
+        "output_tokens": 5853
+      },
+      "session_id": "05cc072a-1b19-48bf-b5f0-d0bca7247e3d",
+      "provider": "claude",
+      "elapsed_ms": 40506,
+      "stage": "triage",
+      "requested_model": "haiku",
+      "model": "claude-sonnet-5-5"
+    }
+  },
+  "base_commit": "8f6cb9da747034ff2cbb10ad9a72460c4b417173",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/config/runtime.exs",
+    "extensions/ensemble/lib/gen_agent_ensemble.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/shipped_backend_references_test.exs"
+  ],
+  "untracked_files": []
+}

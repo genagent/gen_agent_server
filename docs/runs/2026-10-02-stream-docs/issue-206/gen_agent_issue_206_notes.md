@@ -1,0 +1,1 @@
+Treat this as a documentation fix. Use the shipped GenAgentEnsemble.Backends.Echo in copyable examples, and verify all references in Ensemble package docs and runtime config. Keep the patch small. Avoid inventing new backend behavior or changing test-only Mock modules. Do not commit, push, or publish; the caller will run package checks and create the PR.

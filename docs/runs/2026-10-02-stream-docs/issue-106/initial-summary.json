@@ -1,0 +1,52 @@
+{
+  "instance": "handoff/3202",
+  "project": "/tmp/gen_agent_issue_106",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 34,
+        "output_tokens": 26533
+      },
+      "session_id": "276bce04-3fdc-4ff6-8631-09ae8f4755fc",
+      "provider": "claude",
+      "elapsed_ms": 155885,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 164096,
+        "input_tokens": 216079,
+        "output_tokens": 993
+      },
+      "session_id": "01a0fb45-69ad-7763-8d19-5fdec1162524",
+      "provider": "codex",
+      "elapsed_ms": 92539,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 112128,
+        "input_tokens": 141387,
+        "output_tokens": 1803
+      },
+      "session_id": "01a0fb41-b8d1-7f40-8eac-c11b1e0614ee",
+      "provider": "codex",
+      "elapsed_ms": 85554,
+      "stage": "triage",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "8f6cb9da747034ff2cbb10ad9a72460c4b417173",
+  "verdict": "REQUEST CHANGES",
+  "changed_files": [
+    "lib/gen_agent.ex",
+    "lib/gen_agent/server.ex",
+    "test/gen_agent/stream_to_test.exs"
+  ],
+  "untracked_files": []
+}

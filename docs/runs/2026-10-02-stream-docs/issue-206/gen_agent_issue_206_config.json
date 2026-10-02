@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_206",
+  "issue": "/tmp/gen_agent_issue_206.md",
+  "instructions": "/tmp/gen_agent_issue_206_notes.md",
+  "out": "/tmp/gen_agent_issue_206_handoff",
+  "timeout_ms": 900000,
+  "stages": {
+    "triage": {"provider": "claude", "model": "haiku"},
+    "implement": {"provider": "codex", "model": "gpt-6-luna"},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}

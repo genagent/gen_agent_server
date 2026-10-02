@@ -37,6 +37,17 @@ failures and a child-call timeout risk. Preserve the original review and
 pass the exact host failure into the next edit stage; approval, mechanical
 verification, and PR acceptance remain distinct results.
 
+The [#106/#206 runs](runs/2026-10-02-stream-docs/README.md) used a separate
+read-only Solo design ahead of the staged handoff for a risky core API. A
+reviewed revision fixed reproducible test failures, and a final `review_only`
+pass checked a narrow caller-made integrity change. Reusing the existing
+triage and implementation artifacts kept the extra review bounded. A Solo
+`Run.run/3` result did not expose the provider session ID or actual model,
+though the staged handoff did; an optional control API should preserve that
+metadata consistently. Claude plan mode again substituted Sonnet for a
+requested Haiku model, so the recorded actual model matters more than a route
+declared in a prompt or config.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for

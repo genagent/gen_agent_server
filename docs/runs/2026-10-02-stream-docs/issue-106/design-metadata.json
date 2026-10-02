@@ -1,0 +1,8 @@
+{
+  "session_id": "20395fd4-e7d1-4e17-a07e-eda980eccd7d",
+  "requested_model": "opus",
+  "actual_model": "claude-opus-5-5",
+  "provider": "claude",
+  "elapsed_ms": 121070,
+  "method": "GenAgentServer.Run.run/3 Solo; model read from Claude CLI session JSONL after the Run result omitted session metadata"
+}
