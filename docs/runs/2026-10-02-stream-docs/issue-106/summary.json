@@ -1,0 +1,47 @@
+{
+  "instance": "handoff/6210",
+  "project": "/tmp/gen_agent_issue_106",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 163968,
+        "input_tokens": 208556,
+        "output_tokens": 758
+      },
+      "session_id": "01a0fb4d-e690-7a12-86db-f8652a53880c",
+      "provider": "codex",
+      "elapsed_ms": 108968,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "8f6cb9da747034ff2cbb10ad9a72460c4b417173",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "lib/gen_agent.ex",
+    "lib/gen_agent/server.ex",
+    "test/gen_agent/stream_to_test.exs"
+  ],
+  "untracked_files": []
+}

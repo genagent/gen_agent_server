@@ -1,0 +1,49 @@
+{
+  "instance": "handoff/3204",
+  "project": "/tmp/gen_agent_issue_106",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 11500
+      },
+      "session_id": "49d196c2-6c95-4dad-bf7e-46c383ac023f",
+      "provider": "claude",
+      "elapsed_ms": 64774,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 336431,
+        "output_tokens": 878,
+        "cached_input_tokens": 299904
+      },
+      "session_id": "01a0fb49-6e23-7b82-b235-ecdf15ca7435",
+      "provider": "codex",
+      "elapsed_ms": 70389,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "8f6cb9da747034ff2cbb10ad9a72460c4b417173",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "lib/gen_agent.ex",
+    "lib/gen_agent/server.ex",
+    "test/gen_agent/stream_to_test.exs"
+  ],
+  "untracked_files": []
+}
