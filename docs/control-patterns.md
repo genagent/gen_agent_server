@@ -57,6 +57,16 @@ draft PR status, and the core Hex release gate. A future control API can expose
 those as separate stage, validation, and release states without making a model
 verdict authoritative.
 
+The [#239 Pool guide run](runs/2026-10-02-pool-guide/README.md) exposed a
+model-routing preflight gap: the local Codex CLI rejected `gpt-6.1-sol` for
+this account even though the app advertised it. The runner failed before any
+edit and stopped the instance, so the caller could preserve the clean clone
+and retry with `gpt-6-astra`. A higher-level control API should report the
+requested model, actual model, and stage failure distinctly; it should not
+silently substitute a model. The successful review could not execute tests,
+while host validation caught one strict Credo warning, so these gates also
+need separate result fields.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for

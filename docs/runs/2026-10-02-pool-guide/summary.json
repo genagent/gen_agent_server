@@ -1,0 +1,51 @@
+{
+  "instance": "handoff/3202",
+  "project": "/tmp/gen_agent_issue_239_pool",
+  "stages": {
+    "implement": {
+      "usage": {
+        "cached_input_tokens": 449664,
+        "input_tokens": 495585,
+        "output_tokens": 5458
+      },
+      "session_id": "01a0fb73-d597-7af2-8736-c8c42baf00bc",
+      "provider": "codex",
+      "elapsed_ms": 251192,
+      "stage": "implement",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 14,
+        "output_tokens": 4733
+      },
+      "session_id": "48a4636c-4f62-4cbe-afca-1e4386a1f568",
+      "provider": "claude",
+      "elapsed_ms": 45682,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 68608,
+        "input_tokens": 92534,
+        "output_tokens": 1624
+      },
+      "session_id": "01a0fb73-4e1b-73b3-a30d-1984b953103f",
+      "provider": "codex",
+      "elapsed_ms": 34416,
+      "stage": "triage",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    }
+  },
+  "base_commit": "df6d8735482fcd5b804677e2ab2229922c9ffd68",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "guides/patterns/pool.md",
+    "test/guides/pool_test.exs"
+  ],
+  "untracked_files": []
+}
