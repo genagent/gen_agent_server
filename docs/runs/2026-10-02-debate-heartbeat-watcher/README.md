@@ -56,7 +56,7 @@ the first run remain.
 The caller ran ten focused and 290 full core tests, formatting, strict Credo,
 docs, and diff checks. After rebasing onto merged #348, the combined full
 suite passed 295 tests. [PR #349](https://github.com/genagent/gen_agent/pull/349)
-contains the guide and test changes. The older Heartbeat and Watcher scenario
+passed CI and merged as `0a970d4`. The older Heartbeat and Watcher scenario
 files remain as topology fixtures; the new guide tests compile the copyable
 modules themselves. Supervisor scenario drift and leaked workers remain in
 [core #236](https://github.com/genagent/gen_agent/issues/236).
