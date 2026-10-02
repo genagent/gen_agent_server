@@ -1,0 +1,5 @@
+# First slice of genagent/gen_agent#259: Ensemble completion notifications and event-driven await
+
+The Ensemble currently offers `tell` followed by destructive `poll`/`inbox`, and its IEx `await` loops with a 50 ms sleep. Implement an additive first slice: `tell_with_completion` returns the same opaque token and sends one terminal `{:gen_agent_ensemble, :completion, session, token, {:ok, response} | {:error, reason}}` message to a supplied recipient; the result remains available to `poll`/`inbox`. Add a public event-driven `await(name, token, timeout)` for existing tell tokens with explicit timeout/error semantics, and make IEx await delegate to it. Preserve ask and current poll/inbox behavior. Cover successful, error, halt, already-completed, concurrent waiters, timeout, and late-result cases with deterministic tests.
+
+Do not implement cancellation or stream forwarding in this PR. Claude Opus design found that stream forwarding needs core issue #106's request-ref stream events; cancellation also needs a separate per-strategy callback to avoid wrong-token replies. Keep #259 open for those remaining parts.

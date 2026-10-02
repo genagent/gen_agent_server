@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_259",
+  "issue": "/tmp/gen_agent_issue_259_slice_prompt.md",
+  "instructions": "/tmp/gen_agent_issue_259_slice_notes.md",
+  "out": "/tmp/gen_agent_issue_259_slice_artifacts",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {"provider": "codex", "model": null},
+    "implement": {"provider": "codex", "model": null},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}

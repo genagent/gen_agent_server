@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_249",
+  "issue": "/tmp/gen_agent_issue_249_prompt.md",
+  "instructions": "/tmp/gen_agent_issue_249_notes.md",
+  "out": "/tmp/gen_agent_issue_249_artifacts",
+  "timeout_ms": 900000,
+  "stages": {
+    "triage": {"provider": "codex", "model": null},
+    "implement": {"provider": "codex", "model": null},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}
