@@ -92,6 +92,38 @@ defmodule GenAgentServer.CLIMessagesTest do
     end
   end
 
+  test "CLI presents an Ensemble synthesized response with no final_message" do
+    name = "cli-supervisor-#{System.unique_integer([:positive])}"
+    simple = GenAgentEnsemble.Agents.Simple
+    echo = GenAgentEnsemble.Backends.Echo
+
+    opts = [
+      coordinator: {"coordinator", simple, [backend: echo]},
+      worker_template: {"worker", simple, [backend: echo]},
+      decomposer: fn _text -> ["first", "second"] end
+    ]
+
+    assert {:ok, _pid} =
+             GenAgentServer.start_pattern_instance(
+               name,
+               "review",
+               GenAgentEnsemble.Strategies.Supervisor,
+               opts
+             )
+
+    on_exit(fn -> GenAgentServer.stop_instance(name) end)
+
+    prefix = ["--instance", name]
+    assert {:ok, id} = GenAgentServer.CLI.run(prefix ++ ["invoke", "review", "two parts"])
+    assert {:ok, :completed, response} = await_result(name, id)
+    assert response.text == "echo: first\n\necho: second"
+    assert Map.get(response, :final_message) == nil
+    assert {:ok, response.text} == GenAgentServer.CLI.run(prefix ++ ["result", id])
+
+    remote_output = capture_io(fn -> GenAgentServer.CLI.remote_main(prefix ++ ["result", id]) end)
+    assert {:ok, response.text} == GenAgentServer.Remote.decode_response(remote_output)
+  end
+
   defp await_result(name, id, attempts \\ 100)
 
   defp await_result(_name, _id, 0), do: flunk("invocation did not complete")
