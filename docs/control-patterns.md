@@ -1,5 +1,13 @@
 # Control patterns seen in server dogfooding
 
+The [core #118 control run](runs/2026-10-02-core-118-control/README.md) used
+server v0.2.0's nine-tool stdio MCP surface and quickstart resource, but each
+ad hoc client script started its own VM. The next useful control step is one
+supported path that keeps the real Fio PM session while technical inspection,
+edits, tests, review, and release use a shared server instance; server
+[#81](https://github.com/genagent/gen_agent_server/issues/81) remains
+unimplemented and is the highest-value shared-instance usability gap.
+
 Keep executable control code in `examples/` while its shape is still changing.
 This inventory records the repeated steps, so an optional higher-level module
 can be extracted from observed use rather than from a prompt template.
