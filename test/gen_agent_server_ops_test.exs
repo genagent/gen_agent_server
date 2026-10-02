@@ -71,7 +71,7 @@ defmodule GenAgentServer.OpsTest do
     assert {:ok, %{"results" => [%{"status" => "completed", "text" => "echo: echo: a"}]} = report} =
              Ops.call("run_pattern", %{"spec" => spec, "prompts" => ["a"]})
 
-    refute report["instance"] in GenAgentServer.instances()
+    assert eventually(fn -> report["instance"] not in GenAgentServer.instances() end)
 
     assert {:error, %{code: "unknown_pattern"}} =
              Ops.call("run_pattern", %{"spec" => %{"pattern" => "mesh"}, "prompts" => ["a"]})
