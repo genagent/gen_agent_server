@@ -1,0 +1,5 @@
+Revise the current uncommitted implementation in the same checkout in response to `/tmp/gen_agent_issue_236_handoff/review-round-1.md`. Do not commit or push.
+
+The blocking finding is a real wrong-result race: a queued user tell can be consumed as the synthesis answer when the final worker report arrives during another turn. Verify the GenAgent turn ordering in `lib/gen_agent/server.ex`. Identify the actual synthesis turn in a supported callback and only let its response or error finish synthesis. Add a deterministic focused test with an in-flight and a queued extra user turn, then the final report, asserting the final output comes from the synthesis prompt. Make the guide's extra-turn claims accurate.
+
+Fix the three non-blocking review items too: the removed `spawn_workers` reference, the rerun assertion, and the possible stop-during-startup stall in the boundaries section. Preserve all existing guide tests and scope. Run focused tests if possible. The host will run full checks and own PR actions.

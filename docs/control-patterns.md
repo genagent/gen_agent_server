@@ -106,6 +106,19 @@ earlier implementation report. The optional control API should keep a
 monotonic stage/round history and explicit host-validation results; choosing
 which reviewer findings are blocking remains a caller decision.
 
+The [#231/#236 runs](runs/2026-10-02-migration-supervisor/README.md) combined
+an offline dependency-recipe fixture with a callback guide whose initial
+passing tests missed two real queue-ordering failures. A source reviewer
+found that queued user turns could be treated as synthesis and that a
+rejected generated prompt could strand the coordinator. The caller fed
+each exact failure into a bounded `revise` round and required a deterministic
+test before continuing. Host verification used actual Mix dependency
+resolution separately from the offline fixture, then full package gates,
+CI, and merge. `revise` overwrote earlier implement metadata, and manually
+archiving a review before `revise` duplicated the runner's archive; a control
+API needs append-only attempts with stable round IDs. Stage verdicts and
+host checks should remain separate completion conditions.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for

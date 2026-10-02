@@ -1,0 +1,48 @@
+{
+  "instance": "handoff/6212",
+  "project": "/tmp/gen_agent_issue_231_migration",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 14,
+        "output_tokens": 5105
+      },
+      "session_id": "10f90793-e7f8-49b7-8581-02e3f75eab92",
+      "provider": "claude",
+      "elapsed_ms": 34739,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 307116,
+        "output_tokens": 2252,
+        "cached_input_tokens": 264704
+      },
+      "session_id": "01a0fbf8-69e7-7241-a068-49155c2b29b9",
+      "provider": "codex",
+      "elapsed_ms": 118241,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "0a970d410d775bd2d5a3d60b062ceab7d7a4bb10",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "MIGRATION.md",
+    "test/migration_dependency_test.exs"
+  ],
+  "untracked_files": []
+}

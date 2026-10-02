@@ -1,0 +1,13 @@
+{
+  "project": "/tmp/gen_agent_issue_236_supervisor",
+  "issue": "/tmp/gen_agent_issue_236.md",
+  "out": "/tmp/gen_agent_issue_236_handoff",
+  "timeout_ms": 1800000,
+  "review_only": true,
+  "stages": {
+    "triage": {"provider": "claude", "model": "opus"},
+    "implement": {"provider": "codex", "model": "gpt-6-astra"},
+    "review": {"provider": "claude", "model": "opus"}
+  },
+  "instructions": "/tmp/gen_agent_issue_236_final_review_notes.md"
+}
