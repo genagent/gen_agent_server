@@ -211,3 +211,14 @@ two review rounds found different supported wrapper values missing from the
 validator. Keep an append-only record of each review and its host test
 outcome. A model's approval and a green set of newly written tests cannot
 replace tests of existing supported inputs or the full package checks.
+
+The [MCP lifecycle run](runs/2026-10-02-mcp-lifecycle/README.md) exercised
+create, describe, invoke/ask, result, and stop through a packaged stdio client.
+The same connection retained routes and results; another connection would own
+a different VM. A control API should retain this connection scope as explicit
+state rather than pretending a named instance is globally discoverable. The
+run also compared requested models with provider session files: Codex honored
+its choice, while Claude plan mode substituted Sonnet for a requested Haiku.
+The caller changed the dynamic default to a limited-tool mode, then verified
+Haiku through the full MCP path. This is a recurring pattern: expose the
+configured model, but record the observed model separately when possible.

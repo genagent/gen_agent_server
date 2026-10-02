@@ -1,0 +1,63 @@
+{
+  "instance": "handoff/6530",
+  "project": "/tmp/gen_agent_server_claude_023",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 339083,
+        "output_tokens": 1244,
+        "cached_input_tokens": 283776,
+        "cache_write_input_tokens": 0,
+        "reasoning_output_tokens": 362
+      },
+      "session_id": "01a0fddd-0a7e-7be0-9b31-ef653abd245a",
+      "provider": "codex",
+      "elapsed_ms": 69672,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "ef0c3ba0b8617caea0db364b4fc20df5e33b6ac1",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "README.md",
+    "docs/control-patterns.md",
+    "docs/dogfooding.md",
+    "examples/mcp_release_smoke.exs",
+    "lib/gen_agent_server.ex",
+    "lib/gen_agent_server/instance.ex",
+    "lib/gen_agent_server/instance_spec.ex",
+    "lib/gen_agent_server/invocations.ex",
+    "lib/gen_agent_server/mcp.ex",
+    "lib/gen_agent_server/mcp/resources.ex",
+    "lib/gen_agent_server/mcp/server.ex",
+    "lib/gen_agent_server/mcp/tools.ex",
+    "lib/gen_agent_server/ops.ex",
+    "lib/gen_agent_server/providers.ex",
+    "mix.exs",
+    "test/gen_agent_server_lifecycle_test.exs",
+    "test/gen_agent_server_mcp_test.exs"
+  ],
+  "untracked_files": []
+}

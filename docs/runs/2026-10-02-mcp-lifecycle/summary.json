@@ -1,0 +1,66 @@
+{
+  "instance": "handoff/6278",
+  "project": "/tmp/gen_agent_server_claude_023",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 86,
+        "output_tokens": 59386
+      },
+      "session_id": "3ced74ac-a488-4606-9b45-8193e5c69d32",
+      "provider": "claude",
+      "elapsed_ms": 385939,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 758553,
+        "output_tokens": 2878,
+        "cached_input_tokens": 695424,
+        "cache_write_input_tokens": 0,
+        "reasoning_output_tokens": 538
+      },
+      "session_id": "01a0fdd1-0f9e-75c1-a9b8-d5ac795ab220",
+      "provider": "codex",
+      "elapsed_ms": 164578,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "input_tokens": 218054,
+        "output_tokens": 2676,
+        "cached_input_tokens": 166400,
+        "cache_write_input_tokens": 0,
+        "reasoning_output_tokens": 103
+      },
+      "session_id": "01a0fdc9-3e11-76d1-b17a-dbbe3a814354",
+      "provider": "codex",
+      "elapsed_ms": 126183,
+      "stage": "triage",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "ef0c3ba0b8617caea0db364b4fc20df5e33b6ac1",
+  "verdict": "REQUEST CHANGES",
+  "changed_files": [
+    "README.md",
+    "examples/mcp_release_smoke.exs",
+    "lib/gen_agent_server.ex",
+    "lib/gen_agent_server/instance.ex",
+    "lib/gen_agent_server/instance_spec.ex",
+    "lib/gen_agent_server/invocations.ex",
+    "lib/gen_agent_server/mcp.ex",
+    "lib/gen_agent_server/mcp/server.ex",
+    "lib/gen_agent_server/mcp/tools.ex",
+    "lib/gen_agent_server/ops.ex",
+    "lib/gen_agent_server/providers.ex",
+    "test/gen_agent_server_lifecycle_test.exs",
+    "test/gen_agent_server_mcp_test.exs"
+  ],
+  "untracked_files": []
+}

@@ -27,6 +27,8 @@ defmodule GenAgentServer.Invocations do
 
   def routes(name), do: call_instance(name, :routes)
 
+  def describe(name), do: call_instance(name, :describe)
+
   @spec result(String.t(), String.t()) :: result()
   def result(name, id), do: call_instance(name, {:result, id})
 
@@ -68,6 +70,7 @@ defmodule GenAgentServer.Invocations do
                name: name,
                agents: MapSet.new(routes),
                strategy: strategy,
+               description: Keyword.get(opts, :description),
                pending: %{},
                by_token: %{},
                completed: %{},
@@ -95,6 +98,26 @@ defmodule GenAgentServer.Invocations do
   end
 
   @impl true
+  def handle_call(:describe, _from, state) do
+    routes = state.agents |> MapSet.to_list() |> Enum.sort()
+
+    description =
+      case state.description do
+        %{configured: true} = configured ->
+          configured
+
+        _ ->
+          %{configured: false, routes: Enum.map(routes, &%{name: &1})}
+      end
+
+    {:reply,
+     {:ok,
+      Map.merge(description, %{
+        strategy: state.strategy,
+        limits: %{max_in_flight: state.max_in_flight, max_results: state.max_results}
+      })}, state}
+  end
+
   def handle_call({:invoke, agent, prompt, opts}, _from, state) do
     case collect_available(state) do
       {:ok, state} -> admit(agent, prompt, opts, state)

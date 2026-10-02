@@ -30,6 +30,7 @@ defmodule GenAgentServer.Instance do
        strategy: strategy,
        max_in_flight: Keyword.get(opts, :max_in_flight, 16),
        max_results: Keyword.get(opts, :max_results, 100),
+       description: Keyword.get(opts, :description),
        poll_interval_ms: Keyword.get(opts, :poll_interval_ms, 100)}
     ]
 

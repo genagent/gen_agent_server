@@ -138,12 +138,39 @@ defmodule GenAgentServer.Ops do
       ),
       op(
         "stop_instance",
-        "Stop a runtime instance (not the default instance).",
+        "Stop a runtime instance (not the default instance). Its routes and stored results are discarded.",
         true,
         [req("instance", :string, "Instance name")],
         fn a ->
           with :ok <- GenAgentServer.stop_instance(a["instance"]),
                do: {:ok, %{instance: a["instance"], stopped: true}}
+        end
+      ),
+      op(
+        "create_instance",
+        "Create a named instance with one or more provider routes (echo, claude, codex). " <>
+          "Configuration is fixed at creation and held only in memory. Nothing runs until a prompt is submitted.",
+        true,
+        [
+          req("instance", :string, "Name for the new instance"),
+          "config"
+          |> req(:object, "Switchboard configuration: routes, optional cwd and limits")
+          |> Map.put(:schema, config_schema())
+        ],
+        fn a ->
+          with {:ok, description} <-
+                 GenAgentServer.create_instance(a["instance"], a["config"]),
+               do: {:ok, jsonable(Map.put(description, :instance, a["instance"]))}
+        end
+      ),
+      op(
+        "describe_instance",
+        "Describe an instance: routes with provider, model, effort, and access mode, plus limits.",
+        false,
+        [instance()],
+        fn a ->
+          with {:ok, description} <- GenAgentServer.describe_instance(a["instance"]),
+               do: {:ok, jsonable(Map.put(description, :instance, a["instance"]))}
         end
       )
     ]
@@ -170,7 +197,13 @@ defmodule GenAgentServer.Ops do
       "type" => "object",
       "additionalProperties" => false,
       "properties" =>
-        Map.new(params, fn p -> {p.name, Map.put(schema_type(p.type), "description", p.doc)} end),
+        Map.new(params, fn p ->
+          {p.name,
+           p.type
+           |> schema_type()
+           |> Map.merge(Map.get(p, :schema, %{}))
+           |> Map.put("description", p.doc)}
+        end),
       "required" => for(p <- params, p.required, do: p.name)
     }
   end
@@ -220,7 +253,7 @@ defmodule GenAgentServer.Ops do
       [] ->
         Enum.reduce_while(op.params, {:ok, args}, fn p, {:ok, acc} ->
           case {Map.get(acc, p.name), p} do
-            {nil, %{name: "instance"}} ->
+            {nil, %{name: "instance", required: false}} ->
               {:cont, {:ok, Map.put(acc, "instance", GenAgentServer.session_name())}}
 
             {nil, %{required: true}} ->
@@ -260,6 +293,64 @@ defmodule GenAgentServer.Ops do
 
   defp schema_type(:string_list),
     do: %{"type" => "array", "items" => %{"type" => "string"}, "minItems" => 1}
+
+  # Documents GenAgentServer.InstanceSpec for clients. The parser, not this
+  # schema, is the authority: it rejects anything outside these keys.
+  defp config_schema do
+    bounds = GenAgentServer.InstanceSpec.bounds()
+    name = %{"type" => "string", "pattern" => "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"}
+
+    route = %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "name" => Map.put(name, "description", "Route name, unique in the instance"),
+        "provider" => %{"type" => "string", "enum" => GenAgentServer.Providers.names()},
+        "model" => %{
+          "type" => "string",
+          "maxLength" => 128,
+          "description" => "Model name (claude, codex). Omit for the provider default."
+        },
+        "effort" => %{
+          "type" => "string",
+          "enum" => Enum.map(GenAgentServer.Providers.efforts("claude"), &Atom.to_string/1),
+          "description" =>
+            "Reasoning effort. claude: low, medium, high, xhigh, max. codex: low, medium, high."
+        },
+        "cwd" => %{
+          "type" => "string",
+          "description" => "Absolute project directory. Defaults to the top-level cwd."
+        },
+        "claude_permission_mode" => %{
+          "type" => "string",
+          "enum" => ["read_only", "plan", "accept_edits"]
+        },
+        "codex_sandbox" => %{"type" => "string", "enum" => ["read_only", "workspace_write"]},
+        "codex_user_config" => %{"type" => "string", "enum" => ["ignore", "inherit"]}
+      },
+      "required" => ["name", "provider"]
+    }
+
+    %{
+      "additionalProperties" => false,
+      "properties" => %{
+        "routes" => %{
+          "type" => "array",
+          "minItems" => 1,
+          "maxItems" => bounds.max_routes,
+          "items" => route
+        },
+        "cwd" => %{"type" => "string", "description" => "Absolute default project directory"},
+        "max_in_flight" => %{
+          "type" => "integer",
+          "minimum" => 1,
+          "maximum" => bounds.max_in_flight
+        },
+        "max_results" => %{"type" => "integer", "minimum" => 1, "maximum" => bounds.max_results}
+      },
+      "required" => ["routes"]
+    }
+  end
 
   # -- results -----------------------------------------------------------------
 
@@ -301,6 +392,9 @@ defmodule GenAgentServer.Ops do
 
   @doc false
   def normalize(reason) when is_atom(reason), do: error(reason, Atom.to_string(reason))
+
+  def normalize({:invalid_config, detail}) when is_binary(detail),
+    do: error(:invalid_config, detail)
 
   def normalize({kind, detail}) when is_atom(kind),
     do: error(kind, "#{kind}: #{inspect(detail, printable_limit: 500)}")
