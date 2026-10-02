@@ -203,3 +203,11 @@ and tool allowlist. A future control layer should record both the server's
 allowlist and each host's tool policy. It cannot treat separate stdio MCP
 connections as one shared instance: each starts a VM with its own invocation
 IDs and result store.
+
+The [Claude option validation run](runs/2026-10-02-claude-options-117/README.md)
+used a revision and a final review-only pass on the same isolated clone.
+The first host test disproved the initial implementation's compatibility;
+two review rounds found different supported wrapper values missing from the
+validator. Keep an append-only record of each review and its host test
+outcome. A model's approval and a green set of newly written tests cannot
+replace tests of existing supported inputs or the full package checks.
