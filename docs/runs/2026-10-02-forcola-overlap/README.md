@@ -68,6 +68,14 @@ compiled and loaded, and the Codex Forcola runner returned
 `{:ok, {"ready\n", 0}}`. The [lockfile](adapter/probes/mix.lock) records
 the exact resolved versions.
 
-[Core PR #362](https://github.com/genagent/gen_agent/pull/362) contains the
-adapter change. Issue #196 remains claimed until this adapter release is
-published and a fully published consumer resolves without a path dependency.
+[Core PR #362](https://github.com/genagent/gen_agent/pull/362) passed all CI
+gates and merged as `378ff10`. Its generated
+[release PR #363](https://github.com/genagent/gen_agent/pull/363) merged, and
+the Hex publish job succeeded. Both Hex and GitHub list Codex adapter 0.4.3.
+The final [fully published consumer](published-consumer/mix.exs) resolved
+core 0.6.2, Claude adapter 0.2.2, Codex adapter 0.4.3, Claude wrapper
+0.14.5, Codex wrapper 0.5.4, and Forcola 0.4.0, as recorded in its
+[lockfile](published-consumer/mix.lock). Both adapters compiled and loaded;
+the Codex Forcola runner again returned `{:ok, {"ready\n", 0}}`.
+[Issue #196](https://github.com/genagent/gen_agent/issues/196) was closed
+and its `status/in-progress` label cleared after this check.
