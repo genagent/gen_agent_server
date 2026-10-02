@@ -17,6 +17,9 @@
 #     "timeout_ms": 1200000,                      # per stage (default 20 minutes)
 #     "review_only": false,                       # true: re-review the current diff,
 #                                                 # reusing triage.md and implement.md
+#     "revise": false,                            # true: one revise round: the implement
+#                                                 # stage receives review.md and edits the
+#                                                 # existing diff, then a fresh review runs
 #     "stages": {
 #       "triage":    {"provider": "codex",  "model": null},
 #       "implement": {"provider": "claude", "model": "sonnet"},
@@ -56,7 +59,8 @@ defmodule IssueHandoff do
     stages = Map.fetch!(config, "stages")
     File.mkdir_p!(out)
 
-    unless config["review_only"] || git(project, ["status", "--porcelain"]) == "" do
+    unless config["review_only"] || config["revise"] ||
+             git(project, ["status", "--porcelain"]) == "" do
       raise "project checkout is not clean: #{project}"
     end
 
@@ -67,9 +71,11 @@ defmodule IssueHandoff do
 
     try do
       review_only? = Map.get(config, "review_only", false)
+      revise? = Map.get(config, "revise", false)
+      prior_review = if revise?, do: archive_review(out), else: nil
 
       triage =
-        if review_only?,
+        if review_only? or revise?,
           do: reused(out, "triage"),
           else:
             run_stage(name, "triage", stages, timeout, """
@@ -84,9 +90,27 @@ defmodule IssueHandoff do
             """)
 
       implement =
-        if review_only?,
-          do: reused(out, "implement"),
-          else:
+        cond do
+          review_only? ->
+            reused(out, "implement")
+
+          revise? ->
+            run_stage(name, "implement", stages, timeout, """
+            #{issue}
+
+            #{notes}
+
+            You made a change in this repository for the issue above. An independent reviewer
+            requested changes. Verify each finding against the code; address the ones that hold,
+            and say why for any you leave. Keep the rest of the change. Do not commit, create
+            branches, push, or run network commands. Reply with the files changed and one line
+            per finding: fixed, or not fixed with the reason.
+
+            Review:
+            #{prior_review}
+            """)
+
+          true ->
             run_stage(name, "implement", stages, timeout, """
             #{issue}
 
@@ -100,6 +124,7 @@ defmodule IssueHandoff do
             Do not commit, create branches, push, or run network commands. When done, reply with
             the files changed and one line per change.
             """)
+        end
 
       # Intent-to-add puts new files in the diff without staging their content.
       git(project, ["add", "--intent-to-add", "--all"])
@@ -148,6 +173,15 @@ defmodule IssueHandoff do
     after
       GenAgentServer.stop_instance(name)
     end
+  end
+
+  # revise keeps the previous review as review-round-N.md and feeds its text
+  # to the implement stage.
+  defp archive_review(out) do
+    text = File.read!(Path.join(out, "review.md"))
+    n = Path.wildcard(Path.join(out, "review-round-*.md")) |> length() |> Kernel.+(1)
+    File.write!(Path.join(out, "review-round-#{n}.md"), text)
+    text
   end
 
   # review_only re-reviews the current diff and keeps the earlier stage text.
