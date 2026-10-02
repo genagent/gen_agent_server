@@ -61,6 +61,6 @@ supervisor_name = "example-supervisor-#{run_id}"
 
 {:ok, supervisor_id} = GenAgentServer.invoke(supervisor_name, "supervisor", "first, second")
 {:ok, :completed, supervisor_response} = ExampleResult.await(supervisor_name, supervisor_id)
-"echo: first\n\necho: second" = supervisor_response.text
+"### first\n\necho: first\n\n### second\n\necho: second" = supervisor_response.text
 IO.puts("Supervisor:\n#{supervisor_response.text}")
 :ok = GenAgentServer.stop_instance(supervisor_name)

@@ -18,7 +18,7 @@ defmodule GenAgentServer.MixProject do
   defp deps do
     [
       {:gen_agent, "~> 0.6.1 or ~> 0.7.0"},
-      {:gen_agent_ensemble, "~> 0.4.0"},
+      {:gen_agent_ensemble, "~> 0.4.0 or ~> 0.5.0"},
       {:gen_agent_claude, "~> 0.2.0"},
       {:gen_agent_codex, "~> 0.4.0"},
       {:jason, "~> 1.4"},
