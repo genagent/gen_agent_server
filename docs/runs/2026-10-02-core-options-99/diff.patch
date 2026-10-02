@@ -1,0 +1,202 @@
+README.md                           |   4 +-
+ lib/gen_agent.ex                    |  22 +++++++-
+ lib/gen_agent/server.ex             |  10 ++++
+ test/gen_agent/integration_test.exs | 109 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 141 insertions(+), 4 deletions(-)
+
+diff --git a/README.md b/README.md
+index 93d8cff..23e200e 100644
+--- a/README.md
++++ b/README.md
+@@ -185,7 +185,9 @@ idle <--- handle_response --- processing (turn done)
+   mailbox. A halted agent ignores queued prompts until `GenAgent.resume/1`
+   is called.
+ - **Watchdog** -- a `:state_timeout` kills any turn that runs longer than
+-  the configured deadline (default 10 minutes). Configurable per agent.
++  the `:watchdog_ms` deadline (positive integer milliseconds or `:infinity`,
++  default 10 minutes). `:max_tell_results` (non-negative integer, default 100)
++  bounds how many `tell/2` results `poll/2` retains; zero retains none.
+ 
+ ## Lifecycle hooks
+ 
+diff --git a/lib/gen_agent.ex b/lib/gen_agent.ex
+index 62a27b1..2a4f574 100644
+--- a/lib/gen_agent.ex
++++ b/lib/gen_agent.ex
+@@ -543,9 +543,25 @@ defmodule GenAgent do
+   reserved slot outside the prompt count limit, but its payload must fit
+   `:max_pending_prompt_bytes`.
+ 
+-  Any other option is forwarded to `c:init_agent/1`. GenAgent-level
+-  knobs (like `:watchdog_ms`) are recognized and stripped before
+-  forwarding.
++  `:watchdog_ms` is the per-turn deadline in milliseconds (default
++  `600_000`). It must be a positive integer or `:infinity`, which disables
++  the watchdog. `:max_tell_results` is the number of completed `tell/2`
++  results kept for `poll/2` (default `100`). It must be a non-negative
++  integer; the oldest results are evicted first and zero retains none.
++
++  Invalid values for these options and the capture and pending limits make
++  `start_agent/2` return `{:error, reason}` with an `ArgumentError`
++  reason. A missing `:name` or `:backend` raises `KeyError` in the caller.
++  An explicit `nil` for a limit is treated as unset and uses the default.
++
++  The reserved keys `:name`, `:backend`, `:watchdog_ms`,
++  `:max_tell_results`, `:max_events_per_turn`,
++  `:max_event_bytes_per_turn`, `:event_retention`, `:max_pending_prompts`,
++  `:max_pending_prompt_bytes`, `:max_pending_notifications`, and
++  `:max_pending_notification_bytes` are consumed and not forwarded. Any
++  other option, including `:task_supervisor`, is forwarded to
++  `c:init_agent/1`. `start_agent/2` always uses `GenAgent.TaskSupervisor`;
++  use `child_spec/2` to select a different task supervisor.
+ 
+   The child uses `restart: :temporary`. If it exits, call `start_agent/2`
+   explicitly to create another agent; its previous state is not restored.
+diff --git a/lib/gen_agent/server.ex b/lib/gen_agent/server.ex
+index d713bb6..60fc202 100644
+--- a/lib/gen_agent/server.ex
++++ b/lib/gen_agent/server.ex
+@@ -154,6 +154,8 @@ defmodule GenAgent.Server do
+     max_pending_notification_bytes =
+       Keyword.get(opts, :max_pending_notification_bytes, @default_max_pending_notification_bytes)
+ 
++    validate_watchdog!(watchdog_ms)
++    validate_pending_limit!(max_tell_results, :max_tell_results)
+     validate_capture_limit!(max_events_per_turn, :max_events_per_turn)
+     validate_capture_limit!(max_event_bytes_per_turn, :max_event_bytes_per_turn)
+     validate_event_retention!(event_retention)
+@@ -1472,6 +1474,14 @@ defmodule GenAgent.Server do
+     raise ArgumentError, "#{name} must be a positive integer, got: #{inspect(value)}"
+   end
+ 
++  defp validate_watchdog!(:infinity), do: :ok
++  defp validate_watchdog!(value) when is_integer(value) and value > 0, do: :ok
++
++  defp validate_watchdog!(value) do
++    raise ArgumentError,
++          "watchdog_ms must be a positive integer or :infinity, got: #{inspect(value)}"
++  end
++
+   defp validate_event_retention!(mode) when mode in [:compact, :lossless], do: :ok
+ 
+   defp validate_event_retention!(_mode) do
+diff --git a/test/gen_agent/integration_test.exs b/test/gen_agent/integration_test.exs
+index 2b37492..067bd3a 100644
+--- a/test/gen_agent/integration_test.exs
++++ b/test/gen_agent/integration_test.exs
+@@ -131,6 +131,115 @@ defmodule GenAgent.IntegrationTest do
+         GenAgent.start_agent(SimpleAgent, name: "no-backend")
+       end
+     end
++
++    test "rejects invalid :watchdog_ms at start" do
++      for value <- [-5, 0, "600000", :never, 1.5] do
++        assert {:error, %ArgumentError{message: message}} =
++                 GenAgent.start_agent(SimpleAgent,
++                   name: unique_name("bad-watchdog"),
++                   backend: GenAgent.Backends.Mock,
++                   watchdog_ms: value
++                 )
++
++        assert message =~ "watchdog_ms"
++      end
++    end
++
++    test "rejects invalid :max_tell_results at start" do
++      for value <- [-1, "100", :infinity, :unlimited, 1.5] do
++        assert {:error, %ArgumentError{message: message}} =
++                 GenAgent.start_agent(SimpleAgent,
++                   name: unique_name("bad-tell-results"),
++                   backend: GenAgent.Backends.Mock,
++                   max_tell_results: value
++                 )
++
++        assert message =~ "max_tell_results"
++      end
++    end
++
++    test "accepts boundary :watchdog_ms values" do
++      for value <- [1, :infinity] do
++        name = unique_name("ok-watchdog")
++
++        assert {:ok, _pid} =
++                 GenAgent.start_agent(SimpleAgent,
++                   name: name,
++                   backend: GenAgent.Backends.Mock,
++                   watchdog_ms: value,
++                   scripts: [[Event.new(:result, %{text: "ok"})]]
++                 )
++
++        on_exit(fn -> if GenAgent.whereis(name), do: GenAgent.stop(name) end)
++      end
++    end
++
++    test "max_tell_results 0 retains nothing and 1 keeps only the newest" do
++      for {limit, expected} <- [{0, :evicted}, {1, :kept}] do
++        name = unique_name("tell-results")
++
++        {:ok, _pid} =
++          GenAgent.start_agent(SimpleAgent,
++            name: name,
++            backend: GenAgent.Backends.Mock,
++            max_tell_results: limit,
++            scripts: [
++              [Event.new(:result, %{text: "a"})],
++              [Event.new(:result, %{text: "b"})]
++            ]
++          )
++
++        on_exit(fn -> if GenAgent.whereis(name), do: GenAgent.stop(name) end)
++
++        {:ok, first} = GenAgent.tell(name, "one")
++        {:ok, second} = GenAgent.tell(name, "two")
++        # Synchronize on completion of both turns.
++        _ = GenAgent.status(name)
++        Process.sleep(200)
++
++        assert {:error, :not_found} = GenAgent.poll(name, first)
++
++        case expected do
++          :evicted -> assert {:error, :not_found} = GenAgent.poll(name, second)
++          :kept -> assert {:ok, :completed, _} = GenAgent.poll(name, second)
++        end
++      end
++    end
++
++    test "start_agent/2 forwards :task_supervisor to init_agent/1 but strips reserved keys" do
++      test_pid = self()
++
++      defmodule EchoOpts do
++        use GenAgent
++
++        @impl true
++        def init_agent(opts) do
++          send(opts[:test_pid], {:init_opts, Keyword.delete(opts, :test_pid)})
++          {:ok, [scripts: []], []}
++        end
++
++        @impl true
++        def handle_response(_ref, _response, state), do: {:noreply, state}
++      end
++
++      name = unique_name("echo")
++
++      {:ok, _pid} =
++        GenAgent.start_agent(EchoOpts,
++          name: name,
++          backend: GenAgent.Backends.Mock,
++          task_supervisor: :some_supervisor,
++          watchdog_ms: 1_000,
++          max_tell_results: 5,
++          foo: :bar,
++          test_pid: test_pid
++        )
++
++      on_exit(fn -> if GenAgent.whereis(name), do: GenAgent.stop(name) end)
++
++      assert_receive {:init_opts, opts}, 1_000
++      assert Enum.sort(opts) == [foo: :bar, task_supervisor: :some_supervisor]
++    end
+   end
+ 
+   describe "stop/1" do

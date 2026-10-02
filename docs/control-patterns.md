@@ -179,3 +179,10 @@ the caller updated the lockfile and ran the consumers before a second review.
 The reusable control layer could retain external validation results and all
 review rounds alongside stage artifacts, without deciding that every reviewer
 request implies a source test.
+
+The [core option validation run](runs/2026-10-02-core-options-99/README.md)
+shows a smaller revision loop: triage identified the existing startup contract,
+but the implementation still asserted a different error shape and used a sleep
+in a cache-eviction test. Review requested changes, and the host corrected and
+tested them. Store the review findings, revision, and host checks independently;
+do not treat a completed implementation stage as verified work.

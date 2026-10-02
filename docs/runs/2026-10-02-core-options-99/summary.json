@@ -1,0 +1,53 @@
+{
+  "instance": "handoff/3266",
+  "project": "/tmp/gen_agent_fix_99_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 18,
+        "output_tokens": 6333
+      },
+      "session_id": "(omitted from public run log)",
+      "provider": "claude",
+      "elapsed_ms": 49274,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 143872,
+        "input_tokens": 167651,
+        "output_tokens": 882
+      },
+      "session_id": "(omitted from public run log)",
+      "provider": "codex",
+      "elapsed_ms": 64232,
+      "stage": "review",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 107904,
+        "input_tokens": 137290,
+        "output_tokens": 1884
+      },
+      "session_id": "(omitted from public run log)",
+      "provider": "codex",
+      "elapsed_ms": 99919,
+      "stage": "triage",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "3cd79d7b0cf1f9e28776e6e30e67c3e10b9fe8ea",
+  "verdict": "REQUEST CHANGES",
+  "changed_files": [
+    "README.md",
+    "lib/gen_agent.ex",
+    "lib/gen_agent/server.ex",
+    "test/gen_agent/integration_test.exs"
+  ],
+  "untracked_files": []
+}
