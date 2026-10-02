@@ -1,0 +1,13 @@
+{
+  "project": "/tmp/gen_agent_issue_230_hooks",
+  "issue": "/tmp/gen_agent_issue_230.md",
+  "out": "/tmp/gen_agent_issue_230_handoff",
+  "timeout_ms": 1800000,
+  "revise": true,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-luna"},
+    "implement": {"provider": "claude", "model": "sonnet"},
+    "review": {"provider": "codex", "model": "gpt-6-astra"}
+  },
+  "instructions": "/tmp/gen_agent_issue_230_revision_notes.md"
+}
