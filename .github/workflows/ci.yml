@@ -24,6 +24,7 @@ jobs:
       - run: mix run examples/ensemble_patterns.exs
       - run: mix gen_agent_server ask echo "ci"
       - run: MIX_ENV=prod mix release
+      - run: MIX_ENV=prod mix run examples/mcp_release_smoke.exs
       - run: |
           _build/prod/rel/gen_agent_server/bin/gen_agent_server eval \
             'Application.ensure_all_started(:gen_agent_server); case GenAgentServer.ask("echo", "release") do {:ok, %{text: "echo: release"}} -> :ok; other -> raise inspect(other) end'
