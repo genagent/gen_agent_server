@@ -1,0 +1,56 @@
+{
+  "instance": "handoff/3202",
+  "project": "/tmp/gen_agent_issue_220_20261002c",
+  "stages": {
+    "implement": {
+      "usage": {
+        "cached_input_tokens": 546048,
+        "input_tokens": 599021,
+        "output_tokens": 5938
+      },
+      "session_id": "01a0fc6b-e3be-7d02-b0b2-359c454aa6f1",
+      "provider": "codex",
+      "elapsed_ms": 297303,
+      "stage": "implement",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 3620
+      },
+      "session_id": "f1b59382-570f-427e-bfe2-1583ac221ffa",
+      "provider": "claude",
+      "elapsed_ms": 169351,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 96384,
+        "input_tokens": 124830,
+        "output_tokens": 1964
+      },
+      "session_id": "01a0fc6a-70b8-7110-a2a0-15d12a184008",
+      "provider": "codex",
+      "elapsed_ms": 94998,
+      "stage": "triage",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "58ff446583c74477f54c651cf9b92e6150bf3ad7",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/guides/workflows/pipeline.md",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/pipeline.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategy.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/strategies/pipeline_test.exs",
+    "extensions/ensemble/test/gen_agent_ensemble/strategies/usage_test.exs",
+    "lib/gen_agent/response.ex",
+    "test/gen_agent/response_test.exs"
+  ],
+  "untracked_files": []
+}

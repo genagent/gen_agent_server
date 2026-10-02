@@ -1,0 +1,482 @@
+extensions/ensemble/guides/workflows/pipeline.md   |  44 ++++-
+ .../lib/gen_agent_ensemble/strategies/pipeline.ex  |  54 +++++-
+ .../ensemble/lib/gen_agent_ensemble/strategy.ex    |   7 +-
+ .../strategies/pipeline_test.exs                   | 186 +++++++++++++++++++++
+ .../gen_agent_ensemble/strategies/usage_test.exs   |   4 +-
+ lib/gen_agent/response.ex                          |   3 +
+ test/gen_agent/response_test.exs                   |   5 +
+ 7 files changed, 284 insertions(+), 19 deletions(-)
+
+diff --git a/extensions/ensemble/guides/workflows/pipeline.md b/extensions/ensemble/guides/workflows/pipeline.md
+index 6af57e2..37f269d 100644
+--- a/extensions/ensemble/guides/workflows/pipeline.md
++++ b/extensions/ensemble/guides/workflows/pipeline.md
+@@ -24,8 +24,7 @@ gets.
+ - You have a known, ordered sequence of transformations.
+ - Each stage has a distinct role best expressed by a different
+   system prompt.
+-- You don't need to see the intermediate outputs -- only the final
+-  is returned.
++- You want a final answer with inspectable intermediate responses.
+ 
+ Classic shapes:
+ 
+@@ -116,12 +115,6 @@ can see which stage is currently executing.
+ 
+ ## Gotchas
+ 
+-- **Only the last stage's response is returned.** Intermediate
+-  outputs are consumed silently. The
+-  `[:gen_agent, :prompt, :stop]` telemetry event does not carry
+-  response text, so it cannot be used to read them. If you need
+-  intermediate outputs, write a custom strategy that captures each
+-  stage's response.
+ - **Errors short-circuit the pipeline.** If any stage's turn errors,
+   the whole ensemble replies `{:error, {stage_name, reason}}` and
+   the later stages never run.
+@@ -137,7 +130,8 @@ can see which stage is currently executing.
+ ## Usage accounting
+ 
+ Every completed stage counts. The final stage's response keeps its other
+-fields, with `usage` replaced by the full pipeline totals.
++fields, with `usage` replaced by the full pipeline totals and `metadata.pipeline`
++added as described below.
+ 
+ `Response.usage` contains summed numeric provider fields and a reserved
+ `:by_agent` map of agent names to their summed numeric fields. It stays `nil`
+@@ -145,3 +139,35 @@ when no turn reports usage. Nonnumeric fields are dropped, and each invocation
+ starts fresh. Failed turns cannot be counted; session-cumulative backend usage
+ would overcount. See [usage accounting](overview.md#usage-accounting) for the
+ complete shape and per-turn reporting assumption.
++
++## Stage results and duration
++
++`GenAgentEnsemble.ask/3` and `GenAgentEnsemble.await/3` return
++`{:ok, response}`. Inspect `response.metadata.pipeline`:
++
++```elixir
++%{
++  stages: [{"ideator", ideator_response}, {"editor", editor_response},
++           {"headliner", headliner_response}],
++  total_duration_ms: 15000
++}
++```
++
++`stages` contains ordered, full, unmodified `GenAgent.Response` values,
++including the final stage's original usage and metadata. Existing final-stage
++metadata keys are preserved, except `:pipeline`, which is reserved for this
++run. `total_duration_ms` sums stage durations; it excludes queue wait and
++orchestration overhead. Top-level `response.duration_ms` remains the final
++stage's duration.
++
++Repeated `await` calls return the same result. `poll` and `inbox` consume it.
++The strategy retains at most one run's configured stages, clears them on
++success, error, active cancellation or dispatch rejection, and starts queued
++runs fresh. Cancelling a queued token preserves the active run. Errors retain
++the existing error tuples and do not return partial results. Completed token
++storage has no automatic bound; consume results when finished with them.
++There is no additional history cache.
++
++For live capture (including turns before an aborted run), a custom agent's
++`handle_response/3` or `post_turn/3` callback can inspect each full response;
++a custom strategy is unnecessary. Prompt-stop telemetry does not carry text.
+diff --git a/extensions/ensemble/lib/gen_agent_ensemble/strategies/pipeline.ex b/extensions/ensemble/lib/gen_agent_ensemble/strategies/pipeline.ex
+index 2fd48c5..504d0e3 100644
+--- a/extensions/ensemble/lib/gen_agent_ensemble/strategies/pipeline.ex
++++ b/extensions/ensemble/lib/gen_agent_ensemble/strategies/pipeline.ex
+@@ -4,7 +4,18 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+ 
+   N agents run in order. The incoming prompt hits stage 1. Each
+   stage's response text becomes the prompt for the next stage. The
+-  last stage's response is the reply returned to the caller.
++  last stage's response is the reply returned to the caller, with aggregate
++  usage and `metadata.pipeline` containing `stages` (ordered
++  `{stage_name, GenAgent.Response.t()}` pairs, including the unmodified final
++  response) and `total_duration_ms` (the sum of stage durations, excluding
++  queue wait and orchestration overhead). Top-level `duration_ms` remains
++  the final stage's duration. Other metadata keys are preserved; `:pipeline`
++  is reserved for this run's results.
++
++  Only the active run's responses are accumulated. Completion, errors,
++  cancellation, and dispatch rejection clear them. Completed results use
++  the existing token storage; `await` is repeatable, while `poll` and `inbox`
++  consume results. No separate history is retained.
+ 
+   ## Options
+ 
+@@ -31,6 +42,7 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+   defstruct stages: [],
+             phase: :idle,
+             queue: nil,
++            responses: [],
+             usage: Usage.new()
+ 
+   @impl true
+@@ -55,7 +67,7 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+     first = hd(state.stages)
+ 
+     {:ok, [{:dispatch, first, prompt, token}],
+-     %{state | usage: Usage.new(), phase: {:in_stage, 0, token}}}
++     %{state | responses: [], usage: Usage.new(), phase: {:in_stage, 0, token}}}
+   end
+ 
+   defp dispatch_or_queue(prompt, token, state) do
+@@ -81,7 +93,13 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+ 
+   defp advance(idx, token, response, state) do
+     stage = Enum.at(state.stages, idx)
+-    state = %{state | usage: Usage.add(state.usage, stage, response.usage)}
++
++    state = %{
++      state
++      | usage: Usage.add(state.usage, stage, response.usage),
++        responses: [{stage, response} | state.responses]
++    }
++
+     next_idx = idx + 1
+ 
+     if next_idx < length(state.stages) do
+@@ -90,8 +108,18 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+       {:ok, [{:dispatch, next_stage, response.text, token}],
+        %{state | phase: {:in_stage, next_idx, token}}}
+     else
+-      response = %{response | usage: Usage.to_usage(state.usage)}
+-      state = %{state | phase: :idle}
++      pipeline = %{
++        stages: Enum.reverse(state.responses),
++        total_duration_ms: Enum.sum(Enum.map(state.responses, fn {_, r} -> r.duration_ms end))
++      }
++
++      response = %{
++        response
++        | usage: Usage.to_usage(state.usage),
++          metadata: Map.put(response.metadata, :pipeline, pipeline)
++      }
++
++      state = reset_run(state)
+       {ops, state} = maybe_start_next(state, [{:reply, token, response}])
+       {:ok, ops, state}
+     end
+@@ -101,7 +129,7 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+   def handle_error(stage, reason, state) do
+     case state.phase do
+       {:in_stage, _idx, token} ->
+-        state = %{state | phase: :idle}
++        state = reset_run(state)
+         {ops, state} = maybe_start_next(state, [{:reply_error, token, {stage, reason}}])
+         {:ok, ops, state}
+ 
+@@ -116,7 +144,7 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+ 
+     case state.phase do
+       {:in_stage, _, ^token} ->
+-        {ops, state} = maybe_start_next(%{state | phase: :idle, usage: Usage.new()}, [])
++        {ops, state} = maybe_start_next(reset_run(state), [])
+         {:ok, ops, state}
+ 
+       _ ->
+@@ -151,12 +179,22 @@ defmodule GenAgentEnsemble.Strategies.Pipeline do
+     %{stages: state.stages, phase: phase, queued: Queue.len(state.queue)}
+   end
+ 
++  defp reset_run(state),
++    do: %{state | phase: :idle, usage: Usage.new(), responses: []}
++
+   defp maybe_start_next(%{phase: :idle} = state, ops_so_far) do
+     case Queue.pop(state.queue) do
+       {:ok, {token, prompt}, rest} ->
+         first = hd(state.stages)
+ 
+-        state = %{state | usage: Usage.new(), phase: {:in_stage, 0, token}, queue: rest}
++        state = %{
++          state
++          | responses: [],
++            usage: Usage.new(),
++            phase: {:in_stage, 0, token},
++            queue: rest
++        }
++
+         {ops_so_far ++ [{:dispatch, first, prompt, token}], state}
+ 
+       :empty ->
+diff --git a/extensions/ensemble/lib/gen_agent_ensemble/strategy.ex b/extensions/ensemble/lib/gen_agent_ensemble/strategy.ex
+index c31fc68..d898261 100644
+--- a/extensions/ensemble/lib/gen_agent_ensemble/strategy.ex
++++ b/extensions/ensemble/lib/gen_agent_ensemble/strategy.ex
+@@ -27,7 +27,12 @@ defmodule GenAgentEnsemble.Strategy do
+   `:output_tokens`). The reserved `:by_agent` key contains
+   `%{agent_name => summed_numeric_usage_map}`; these maps sum to the top-level
+   totals. Supervisor includes the coordinator and all completed workers.
+-  Pipeline preserves the final stage's other response fields.
++  Pipeline preserves the final stage's other response fields and adds
++  `metadata.pipeline`: `stages` holds ordered `{stage_name, response}` pairs
++  with every unmodified stage response, and `total_duration_ms` sums their
++  durations (excluding queue wait and orchestration overhead). Top-level
++  `duration_ms` still describes the final stage. Other metadata keys survive;
++  `:pipeline` is reserved for the current run.
+ 
+   Missing or non-map usage is ignored. If no turn reports a usage map,
+   `usage` remains `nil`. Empty maps or maps containing only nonnumeric
+diff --git a/extensions/ensemble/test/gen_agent_ensemble/strategies/pipeline_test.exs b/extensions/ensemble/test/gen_agent_ensemble/strategies/pipeline_test.exs
+index aa856a5..70c7869 100644
+--- a/extensions/ensemble/test/gen_agent_ensemble/strategies/pipeline_test.exs
++++ b/extensions/ensemble/test/gen_agent_ensemble/strategies/pipeline_test.exs
+@@ -2,6 +2,9 @@ defmodule GenAgentEnsemble.Strategies.PipelineTest do
+   use ExUnit.Case, async: false
+ 
+   alias GenAgent.Backends.Mock
++  alias GenAgent.Response
++  alias GenAgentEnsemble, as: E
++  alias GenAgentEnsemble.{ControlledAgent, ControlledBackend}
+   alias GenAgent.Event
+   alias GenAgentEnsemble.Strategies.Pipeline
+   alias GenAgentEnsemble.TestAgent
+@@ -125,6 +128,189 @@ defmodule GenAgentEnsemble.Strategies.PipelineTest do
+     assert info.queued == 0
+   end
+ 
++  defp response(text, duration, usage) do
++    response =
++      Response.from_events(
++        [Event.new(:usage, usage), Event.new(:result, %{text: text})],
++        duration_ms: duration,
++        session_id: text
++      )
++
++    %{response | metadata: %{source: text, pipeline: :original}}
++  end
++
++  defp strategy_state(stages \\ ["a", "b"]) do
++    {:ok, state, _} = Pipeline.init(stages: Enum.map(stages, &{&1, TestAgent, []}))
++    state
++  end
++
++  test "retains ordered full responses and summed duration without changing final fields" do
++    first = response("first", 17, %{input_tokens: 3})
++    last = response("last", 23, %{input_tokens: 5, output_tokens: 2})
++    {:ok, _, state} = Pipeline.handle_tell("seed", [], "one", strategy_state())
++
++    assert {:ok, [{:dispatch, "b", "first", "one"}], state} =
++             Pipeline.handle_response("a", first, state)
++
++    assert {:ok, [{:reply, "one", result}], state} = Pipeline.handle_response("b", last, state)
++
++    assert result.metadata.pipeline == %{
++             stages: [{"a", first}, {"b", last}],
++             total_duration_ms: 40
++           }
++
++    assert result.metadata.source == "last"
++    assert %{result | usage: last.usage, metadata: last.metadata} == last
++
++    assert result.usage == %{
++             input_tokens: 8,
++             output_tokens: 2,
++             by_agent: %{"a" => first.usage, "b" => last.usage}
++           }
++
++    assert state.responses == []
++    assert state.phase == :idle
++    {:ok, _, state} = Pipeline.handle_ask("next", [], "two", state)
++    fresh = %Response{text: "fresh"}
++    {:ok, _, state} = Pipeline.handle_response("a", fresh, state)
++    {:ok, [{:reply, "two", result}], _} = Pipeline.handle_response("b", fresh, state)
++
++    assert result.metadata.pipeline == %{
++             stages: [{"a", fresh}, {"b", fresh}],
++             total_duration_ms: 0
++           }
++
++    assert result.usage == nil
++  end
++
++  test "single stage includes its original response" do
++    original = response("only", 9, %{})
++    {:ok, _, state} = Pipeline.handle_tell("seed", [], "one", strategy_state(["a"]))
++    {:ok, [{:reply, "one", result}], state} = Pipeline.handle_response("a", original, state)
++    assert result.metadata.pipeline == %{stages: [{"a", original}], total_duration_ms: 9}
++    assert state.responses == []
++  end
++
++  for exit_kind <- [:error, :cancel, :rejected], queued? <- [false, true] do
++    test "#{exit_kind} clears partial results with queued successor: #{queued?}" do
++      {:ok, _, state} = Pipeline.handle_tell("old", [], "old", strategy_state())
++
++      {:ok, _, state} =
++        Pipeline.handle_response("a", response("old", 100, %{input_tokens: 99}), state)
++
++      state =
++        if unquote(queued?) do
++          {:ok, [], state} = Pipeline.handle_tell("new", [], "new", state)
++          state
++        else
++          state
++        end
++
++      {:ok, ops, state} =
++        case unquote(exit_kind) do
++          :error -> Pipeline.handle_error("b", :boom, state)
++          :cancel -> Pipeline.handle_cancel("old", state)
++          :rejected -> Pipeline.handle_dispatch_rejected("b", "old", :boom, state)
++        end
++
++      if unquote(exit_kind) != :cancel,
++        do: assert({:reply_error, "old", {"b", :boom}} in ops)
++
++      assert state.responses == []
++
++      state =
++        if unquote(queued?) do
++          assert {:dispatch, "a", "new", "new"} in ops
++          state
++        else
++          assert state.phase == :idle
++          {:ok, _, state} = Pipeline.handle_tell("new", [], "new", state)
++          state
++        end
++
++      fresh = response("fresh", 4, %{input_tokens: 1})
++      {:ok, _, state} = Pipeline.handle_response("a", fresh, state)
++      {:ok, [{:reply, "new", result}], _} = Pipeline.handle_response("b", fresh, state)
++
++      assert result.metadata.pipeline == %{
++               stages: [{"a", fresh}, {"b", fresh}],
++               total_duration_ms: 8
++             }
++
++      assert result.usage.input_tokens == 2
++    end
++  end
++
++  defp controlled_pipeline(name) do
++    stages =
++      for stage <- ["a", "b"],
++          do: {stage, ControlledAgent, [backend: ControlledBackend, observer: self(), tag: stage]}
++
++    E.start_link(name: name, strategy: Pipeline, opts: [stages: stages])
++  end
++
++  defp finish_controlled(first_task, text) do
++    send(first_task, {:result, text})
++    assert_receive {:controlled_prompt, "b", ^text, second_task}
++    send(second_task, {:result, "final " <> text})
++  end
++
++  test "queued results survive repeated await and consumption with isolated stages", %{name: name} do
++    {:ok, _} = controlled_pipeline(name)
++    {:ok, one} = E.tell(name, "one")
++    assert_receive {:controlled_prompt, "a", "one", first}
++    {:ok, two} = E.tell(name, "two")
++    {:ok, cancelled} = E.tell(name, "cancelled")
++    send(first, {:result, "first one"})
++    assert_receive {:controlled_prompt, "b", "first one", last}
++    assert E.cancel(name, cancelled) == {:ok, :cancelled}
++    send(last, {:result, "final one"})
++    assert {:ok, result_one} = E.await(name, one, 2_000)
++    assert_receive {:controlled_prompt, "a", "two", second}
++    finish_controlled(second, "first two")
++    assert {:ok, result_two} = E.await(name, two, 2_000)
++
++    for {token, result, text} <- [{one, result_one, "first one"}, {two, result_two, "first two"}] do
++      assert E.await(name, token, 0) == {:ok, result}
++      assert [{"a", a}, {"b", b}] = result.metadata.pipeline.stages
++      assert a.text == text
++      assert b.text == result.text
++      assert result.metadata.pipeline.total_duration_ms == a.duration_ms + b.duration_ms
++    end
++
++    assert E.poll(name, one) == {:ok, :completed, result_one}
++    assert E.await(name, one, 0) == {:error, :not_found}
++    assert {:ok, entries} = E.inbox(name)
++    assert {two, {:ok, result_two}} in entries
++    assert {cancelled, {:error, :cancelled}} in entries
++    assert E.await(name, two, 0) == {:error, :not_found}
++  end
++
++  test "active cancellation fences late completions from the next run", %{name: name} do
++    {:ok, pid} = controlled_pipeline(name)
++    {:ok, old} = E.tell(name, "old")
++    assert_receive {:controlled_prompt, "a", "old", first}
++    send(first, {:result, "partial"})
++    assert_receive {:controlled_prompt, "b", "partial", _}
++    [{ref, {"b", ^old}}] = Map.to_list(:sys.get_state(pid).in_flight)
++    {:ok, new} = E.tell(name, "new")
++    assert E.cancel(name, old) == {:ok, :cancelled}
++    assert_receive {:controlled_prompt, "a", "new", next}
++    send(pid, {:gen_agent, :completion, "#{name}/b", ref, {:ok, response("late", 999, %{})}})
++    send(pid, {:gen_agent, :completion, "#{name}/b", ref, {:error, :late}})
++    finish_controlled(next, "fresh")
++    assert {:ok, result} = E.await(name, new, 2_000)
++
++    assert Enum.map(result.metadata.pipeline.stages, fn {_, r} -> r.text end) == [
++             "fresh",
++             "final fresh"
++           ]
++
++    assert E.await(name, old, 0) == {:error, :cancelled}
++    assert E.poll(name, old) == {:error, :cancelled}
++    assert :sys.get_state(pid).strategy_state.responses == []
++  end
++
+   defp await_completion(name, token, retries \\ 100) do
+     case GenAgentEnsemble.poll(name, token) do
+       {:ok, :completed, response} ->
+diff --git a/extensions/ensemble/test/gen_agent_ensemble/strategies/usage_test.exs b/extensions/ensemble/test/gen_agent_ensemble/strategies/usage_test.exs
+index c54097d..0239dbf 100644
+--- a/extensions/ensemble/test/gen_agent_ensemble/strategies/usage_test.exs
++++ b/extensions/ensemble/test/gen_agent_ensemble/strategies/usage_test.exs
+@@ -168,7 +168,9 @@ defmodule GenAgentEnsemble.Strategies.UsageTest do
+              by_agent: %{"a" => %{input_tokens: 4}, "c" => %{output_tokens: 7}}
+            }
+ 
+-    assert %{result | usage: last.usage} == last
++    assert %{result | usage: last.usage, metadata: last.metadata} == last
++    assert List.last(result.metadata.pipeline.stages) == {"c", last}
++    assert result.metadata.pipeline.total_duration_ms == 42
+   end
+ 
+   test "Consensus counts abstains and both rounds in a divergence and custom synthesis" do
+diff --git a/lib/gen_agent/response.ex b/lib/gen_agent/response.ex
+index f9ede7a..37c7b8d 100644
+--- a/lib/gen_agent/response.ex
++++ b/lib/gen_agent/response.ex
+@@ -18,6 +18,7 @@ defmodule GenAgent.Response do
+       retained log. `mode: :exact` means no event was omitted.
+     * `:usage` -- token usage if the backend reported any, otherwise `nil`.
+     * `:duration_ms` -- wall-clock time from prompt dispatch to terminal event.
++    * `:metadata` -- additive application or orchestration results, defaulting to `%{}`.
+     * `:session_id` -- the backend's session identifier, if any.
+   """
+ 
+@@ -31,6 +32,7 @@ defmodule GenAgent.Response do
+           event_coverage: map(),
+           usage: map() | nil,
+           duration_ms: non_neg_integer(),
++          metadata: map(),
+           session_id: String.t() | nil
+         }
+ 
+@@ -41,6 +43,7 @@ defmodule GenAgent.Response do
+             event_coverage: %{},
+             usage: nil,
+             duration_ms: 0,
++            metadata: %{},
+             session_id: nil
+ 
+   @doc """
+diff --git a/test/gen_agent/response_test.exs b/test/gen_agent/response_test.exs
+index 2e4ae9e..d7d58a7 100644
+--- a/test/gen_agent/response_test.exs
++++ b/test/gen_agent/response_test.exs
+@@ -7,6 +7,11 @@ defmodule GenAgent.ResponseTest do
+     assert %Response{text: "synthetic"}.final_message == nil
+   end
+ 
++  test "metadata defaults to an empty map for manual and backend responses" do
++    assert %Response{}.metadata == %{}
++    assert Response.from_events([Event.new(:result, %{text: "done"})]).metadata == %{}
++  end
++
+   describe "from_events/2" do
+     test "takes text from the :result event when present" do
+       events = [
