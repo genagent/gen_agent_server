@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_259_cancel",
+  "issue": "/tmp/gen_agent_issue_259_cancel_prompt.md",
+  "instructions": "/tmp/gen_agent_issue_259_cancel_notes.md",
+  "out": "/tmp/gen_agent_issue_259_cancel_artifacts",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {"provider": "claude", "model": "opus"},
+    "implement": {"provider": "codex", "model": null},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}
