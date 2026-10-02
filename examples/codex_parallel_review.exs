@@ -16,6 +16,7 @@ unless Enum.all?(review_tasks, &(&1 != "")), do: raise("review tasks must not be
 
 name = "parallel-review-#{System.unique_integer([:positive])}"
 simple = GenAgentEnsemble.Agents.Simple
+{:ok, codex_opts} = GenAgentServer.Providers.backend_opts("codex", cwd: cwd)
 
 decomposer = fn text ->
   text
@@ -33,9 +34,7 @@ end
     "review",
     GenAgentEnsemble.Strategies.Supervisor,
     coordinator: {"splitter", simple, backend: GenAgentEnsemble.Backends.Echo},
-    worker_template:
-      {"codex", simple,
-       backend: GenAgent.Backends.Codex, cwd: cwd, sandbox: :read_only, approval_policy: :never},
+    worker_template: {"codex", simple, codex_opts},
     decomposer: decomposer,
     synthesizer: synthesizer
   )
