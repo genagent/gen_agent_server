@@ -212,6 +212,12 @@ separate shell commands. The local `mix gen_agent_server` task starts a fresh
 VM, so its `invoke` and `result` commands are intentionally unavailable.
 Both CLI tasks preserve UTF-8 output when piped. Expected request errors exit
 non-zero with a single-line message that names the searched instance.
+For a turn with multiple completed assistant messages, the CLI displays the
+final message. `GenAgent.Response.text` still contains the assembled text of
+the full turn, including earlier progress messages. Elixir API callers can
+read the original response and its retained events with `GenAgentServer.ask/3`
+or `GenAgentServer.result/2`; check `Response.event_coverage` before treating
+the retained event list as complete.
 
 To run an Ensemble pattern from a JSON spec, use `gen_agent_server.run`. The
 included Echo specs are safe to try without a CLI provider:
