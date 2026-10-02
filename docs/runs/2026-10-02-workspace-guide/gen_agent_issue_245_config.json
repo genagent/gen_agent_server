@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_245_workspace",
+  "issue": "/tmp/gen_agent_issue_245.md",
+  "instructions": "/tmp/gen_agent_issue_245_notes.md",
+  "out": "/tmp/gen_agent_issue_245_handoff",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {"provider": "claude", "model": "opus"},
+    "implement": {"provider": "codex", "model": "gpt-6-astra"},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}

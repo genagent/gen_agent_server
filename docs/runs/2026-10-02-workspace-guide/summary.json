@@ -1,0 +1,45 @@
+{
+  "instance": "handoff/2",
+  "project": "/tmp/gen_agent_issue_245_workspace",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 8704
+      },
+      "session_id": "d5cb1a76-73fc-494f-bae3-537767f34134",
+      "provider": "claude",
+      "elapsed_ms": 77341,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "22de093618be8a02b9cca6fb6efcc562097c81e8",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "guides/patterns/workspace.md",
+    "test/guides/workspace_test.exs"
+  ],
+  "untracked_files": []
+}

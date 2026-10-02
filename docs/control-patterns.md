@@ -67,6 +67,14 @@ silently substitute a model. The successful review could not execute tests,
 while host validation caught one strict Credo warning, so these gates also
 need separate result fields.
 
+The [#245 Workspace run](runs/2026-10-02-workspace-guide/README.md) timed out
+mid-implementation with a useful diff but no saved triage or implementer text:
+`issue_handoff.exs` writes all stage artifacts only after review completes.
+The caller validated the diff and ran `review_only`, whose summary explicitly
+marks the missing stages unavailable. A control module should persist each
+completed stage at its boundary and retain a terminal timeout or failed-stage
+record; recovery should reuse the checkout without fabricating lost outputs.
+
 The [#243 Checkpointer run](runs/2026-10-02-checkpointer-guide/README.md)
 shows why an approving review and a passing host test should be distinct
 stage results. Claude's implementation and Codex's review both checked the
