@@ -25,7 +25,11 @@ explicitly says it did not run tests. It identified two stale descriptions of
 `post_run/1`; the caller fixed those and repeated the docs and diff checks.
 The recovered `triage.md` and `implement.md` are the script's explicit
 `(not available)` markers, not reconstructed model outputs. The source fix is
-[gen_agent PR #345](https://github.com/genagent/gen_agent/pull/345).
+[gen_agent PR #345](https://github.com/genagent/gen_agent/pull/345),
+merged as `e9920af`. Its first CI attempt passed the Workspace tests but
+failed an existing OTP 29 test cleanup race and a Claude example job that
+received HTTP 500 fetching a Forcola binary. Both failed jobs passed on a
+targeted retry; the package archive gate then passed.
 
 Mechanically, a timeout can leave valid edits without a terminal implementation
 response. Save each completed stage immediately, and make a later review-only
