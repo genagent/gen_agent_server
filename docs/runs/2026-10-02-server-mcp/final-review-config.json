@@ -1,0 +1,23 @@
+{
+  "project": "/tmp/gen_agent_server_mcp_010_20261002",
+  "issue": "/tmp/gen_agent_server_mcp_010_issue.md",
+  "instructions": "/tmp/gen_agent_server_mcp_010_notes.md",
+  "out": "/tmp/gen_agent_server_mcp_010_run",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    "implement": {
+      "provider": "claude",
+      "model": "sonnet"
+    },
+    "review": {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    }
+  },
+  "revise": false,
+  "review_only": true
+}

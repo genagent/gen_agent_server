@@ -1,0 +1,50 @@
+{
+  "instance": "handoff/39170",
+  "project": "/tmp/gen_agent_server_mcp_010_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 5089
+      },
+      "session_id": "980c25d3-a867-4588-a76a-385b66723c36",
+      "provider": "claude",
+      "stage": "implement",
+      "model": "claude-sonnet-5-5",
+      "elapsed_ms": 51618,
+      "requested_model": "sonnet"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 92572,
+        "output_tokens": 608,
+        "cached_input_tokens": 69504
+      },
+      "session_id": "01a0fcd0-5c6e-7730-8301-3f7cb7e6a631",
+      "provider": "codex",
+      "stage": "review",
+      "model": "gpt-6-astra",
+      "elapsed_ms": 34031,
+      "requested_model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "input_tokens": 287045,
+        "output_tokens": 2646,
+        "cached_input_tokens": 244352
+      },
+      "session_id": "01a0fccd-7c4c-71d0-a1ad-1447b270f94a",
+      "provider": "codex",
+      "stage": "triage",
+      "model": "gpt-6-astra",
+      "elapsed_ms": 137049,
+      "requested_model": "gpt-6-astra"
+    }
+  },
+  "verdict": "REQUEST CHANGES",
+  "base_commit": "022780a64770fcf6890bc4a21ef77430f4f45473",
+  "changed_files": [
+    "lib/gen_agent_server/ops.ex"
+  ],
+  "untracked_files": []
+}

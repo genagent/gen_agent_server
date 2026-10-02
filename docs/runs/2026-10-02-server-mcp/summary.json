@@ -1,0 +1,53 @@
+{
+  "instance": "handoff/6274",
+  "project": "/tmp/gen_agent_server_mcp_010_20261002",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 499456,
+        "input_tokens": 545199,
+        "output_tokens": 2565
+      },
+      "session_id": "01a0fcdd-cf21-7dd3-a60d-559e0063e605",
+      "provider": "codex",
+      "elapsed_ms": 139922,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "022780a64770fcf6890bc4a21ef77430f4f45473",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "README.md",
+    "lib/gen_agent_server/mcp.ex",
+    "lib/gen_agent_server/mcp/server.ex",
+    "lib/gen_agent_server/mcp/tools.ex",
+    "lib/gen_agent_server/ops.ex",
+    "lib/mix/tasks/gen_agent_server.mcp.ex",
+    "mix.exs",
+    "mix.lock",
+    "test/gen_agent_server_mcp_test.exs"
+  ],
+  "untracked_files": []
+}

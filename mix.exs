@@ -23,6 +23,7 @@ defmodule GenAgentServer.MixProject do
       {:gen_agent_codex, "~> 0.4.0"},
       {:jason, "~> 1.4"},
       {:quantum, "~> 3.5"},
+      {:snodo, "~> 0.4.0"},
       {:telemetry, "~> 1.0"}
     ]
   end
