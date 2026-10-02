@@ -53,10 +53,18 @@ defmodule GenAgentServer do
 
   def status(instance \\ session_name()) do
     case Registry.lookup(GenAgentServer.Registry, {:instance, instance}) do
-      [{_pid, _}] ->
-        with {:ok, status} <- GenAgentEnsemble.status(instance),
-             {:ok, routes} <- agents(instance) do
-          {:ok, Map.put(status, :routes, routes)}
+      [{pid, _}] ->
+        try do
+          with {:ok, status} <- GenAgentEnsemble.status(instance),
+               {:ok, routes} <- agents(instance) do
+            {:ok, Map.put(status, :routes, routes)}
+          end
+        catch
+          :exit, {:noproc, {GenServer, :call, _}} = reason ->
+            if Process.alive?(pid), do: exit(reason), else: {:error, :instance_not_found}
+
+          :exit, reason ->
+            exit(reason)
         end
 
       [] ->

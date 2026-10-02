@@ -1,6 +1,7 @@
 defmodule GenAgentServerTest do
   use ExUnit.Case
   import ExUnit.CaptureIO
+  import ExUnit.CaptureLog
 
   defmodule ErrorBackend do
     @behaviour GenAgent.Backend
@@ -11,10 +12,74 @@ defmodule GenAgentServerTest do
     def terminate_session(_session), do: :ok
   end
 
+  defmodule FailingStatus do
+    use GenServer
+
+    def init(owner), do: {:ok, owner}
+
+    def handle_call(:status, _from, owner) do
+      monitor = Process.monitor(owner)
+      Process.exit(owner, :kill)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^owner, _reason} -> :ok
+      end
+
+      {:stop, :fixture_failure, owner}
+    end
+  end
+
   test "application serves the Echo agent through one local API" do
     assert {:ok, ["echo"]} = GenAgentServer.agents()
     assert {:ok, %{text: "echo: hello"}} = GenAgentServer.ask("echo", "hello")
     assert {:error, {:unknown_agent, "missing"}} = GenAgentServer.ask("missing", "hello")
+  end
+
+  test "status immediately after stopping an instance returns not found" do
+    agents = [{"echo", GenAgentEnsemble.Agents.Simple, [backend: GenAgentEnsemble.Backends.Echo]}]
+    prefix = "stopped-status-#{System.unique_integer([:positive])}"
+
+    for first <- [:status, :agents], i <- 1..200 do
+      name = "#{prefix}-#{first}-#{i}"
+      assert {:ok, _pid} = GenAgentServer.start_instance(name, agents)
+      assert :ok = GenAgentServer.stop_instance(name)
+
+      case first do
+        :status ->
+          assert {:error, :instance_not_found} = GenAgentServer.status(name)
+          assert {:error, :instance_not_found} = GenAgentServer.agents(name)
+
+        :agents ->
+          assert {:error, :instance_not_found} = GenAgentServer.agents(name)
+          assert {:error, :instance_not_found} = GenAgentServer.status(name)
+      end
+    end
+  end
+
+  test "status preserves an unrelated Ensemble exit after the instance owner dies" do
+    name = "failed-status-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    owner =
+      spawn(fn ->
+        {:ok, _} = Registry.register(GenAgentServer.Registry, {:instance, name}, nil)
+        send(parent, :instance_registered)
+
+        receive do
+          :keep_alive -> :ok
+        end
+      end)
+
+    assert_receive :instance_registered
+
+    assert {:ok, _pid} =
+             GenServer.start(FailingStatus, owner,
+               name: {:via, Registry, {GenAgentEnsemble.Registry, name}}
+             )
+
+    capture_log(fn ->
+      assert {:fixture_failure, {GenServer, :call, _}} = catch_exit(GenAgentServer.status(name))
+    end)
   end
 
   test "invocation results survive the caller and can be read repeatedly" do
