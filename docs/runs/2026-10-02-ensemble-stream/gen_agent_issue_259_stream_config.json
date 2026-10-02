@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_259_stream",
+  "issue": "/tmp/gen_agent_issue_259_stream.md",
+  "instructions": "/tmp/gen_agent_issue_259_stream_notes.md",
+  "out": "/tmp/gen_agent_issue_259_stream_handoff",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-astra"},
+    "implement": {"provider": "codex", "model": "gpt-6-astra"},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}
