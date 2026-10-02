@@ -1,0 +1,47 @@
+{
+  "instance": "handoff/6211",
+  "project": "/tmp/gen_agent_issue_236_supervisor",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 4487
+      },
+      "session_id": "512d6047-7102-47e8-95ed-af184807a6c5",
+      "provider": "claude",
+      "elapsed_ms": 49662,
+      "stage": "review",
+      "requested_model": "opus",
+      "model": "claude-opus-5-5"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "0a970d410d775bd2d5a3d60b062ceab7d7a4bb10",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "guides/patterns/research.md",
+    "guides/patterns/supervisor.md",
+    "test/guides/research_test.exs",
+    "test/guides/supervisor_test.exs"
+  ],
+  "untracked_files": []
+}
