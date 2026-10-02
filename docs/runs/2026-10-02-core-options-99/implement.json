@@ -1,0 +1,12 @@
+{
+  "usage": {
+    "input_tokens": 18,
+    "output_tokens": 6333
+  },
+  "session_id": "(omitted from public run log)",
+  "provider": "claude",
+  "elapsed_ms": 49274,
+  "stage": "implement",
+  "requested_model": "sonnet",
+  "model": "claude-sonnet-5-5"
+}
