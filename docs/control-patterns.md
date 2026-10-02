@@ -186,3 +186,11 @@ but the implementation still asserted a different error shape and used a sleep
 in a cache-eviction test. Review requested changes, and the host corrected and
 tested them. Store the review findings, revision, and host checks independently;
 do not treat a completed implementation stage as verified work.
+
+The [Codex usage run](runs/2026-10-02-codex-usage-124/README.md) first used
+a read-only live provider probe to resolve whether resume counters are
+cumulative. The staged worker then changed translation, while review and host
+tests identified two distinct stale assertions. A control API should retain
+probe evidence, raw-provider versus normalized expectations, review findings,
+and host validation separately so a passed model stage cannot stand in for a
+measured provider contract or a passing suite.

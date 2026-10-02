@@ -1,0 +1,17 @@
+{
+  "same_thread": true,
+  "first_usage": {
+    "input_tokens": 14985,
+    "cached_input_tokens": 11008,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 5,
+    "reasoning_output_tokens": 0
+  },
+  "second_usage": {
+    "input_tokens": 31279,
+    "cached_input_tokens": 25088,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 11,
+    "reasoning_output_tokens": 0
+  }
+}
