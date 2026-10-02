@@ -1,0 +1,55 @@
+{
+  "instance": "handoff/4034",
+  "project": "/tmp/codex_wrapper_fix_123_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 5750
+      },
+      "session_id": "(omitted from public run log)",
+      "provider": "claude",
+      "elapsed_ms": 36903,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 126592,
+        "input_tokens": 153895,
+        "output_tokens": 1031
+      },
+      "session_id": "(omitted from public run log)",
+      "provider": "codex",
+      "elapsed_ms": 99053,
+      "stage": "review",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 106752,
+        "input_tokens": 130640,
+        "output_tokens": 1457
+      },
+      "session_id": "(omitted from public run log)",
+      "provider": "codex",
+      "elapsed_ms": 76514,
+      "stage": "triage",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "0f09d8fdf7fdf17459fa6df8c4a5c28948cc6646",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "README.md",
+    "lib/codex_wrapper.ex",
+    "lib/codex_wrapper/config.ex",
+    "lib/codex_wrapper/iex.ex",
+    "test/codex_wrapper/command_test.exs",
+    "test/codex_wrapper/config_test.exs"
+  ],
+  "untracked_files": []
+}

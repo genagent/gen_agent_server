@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/codex_wrapper_fix_123_20261002",
+  "issue": "issue.md",
+  "instructions": "wrapper_notes.md",
+  "out": "wrapper_artifacts",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {"provider": "codex", "model": null},
+    "implement": {"provider": "claude", "model": "sonnet"},
+    "review": {"provider": "codex", "model": null}
+  }
+}

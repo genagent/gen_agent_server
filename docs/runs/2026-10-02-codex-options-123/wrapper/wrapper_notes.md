@@ -1,0 +1,5 @@
+Scope for this run: codex_wrapper_ex only, specifically the undefined global --verbose flag in issue #123. Do not edit gen_agent or solve :ephemeral here. The installed codex-cli 0.157.1 rejects `codex --verbose --version` with exit 2, and neither root `codex --help` nor `codex exec --help` lists --verbose. Verify source and tests before editing.
+
+Goal: no wrapper operation may emit the nonexistent --verbose flag. Remove misleading advertised support. An explicitly supplied `verbose: true` must fail clearly before launching the CLI, rather than silently being ignored. `verbose: false` can remain accepted for compatibility. Keep the public Config/base_args API stable where practical; avoid changing unrelated flags. Add a focused regression test for the unsupported true option and verify representative wrapper calls cannot emit the flag. Update README/API docs that currently claim it works.
+
+Do not commit, push, change versions, run network commands, or edit outside this isolated wrapper checkout. The caller will run tests, inspect the diff, and coordinate the adapter update separately.

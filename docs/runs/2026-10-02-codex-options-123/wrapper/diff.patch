@@ -1,0 +1,176 @@
+README.md                           |  2 +-
+ lib/codex_wrapper.ex                |  4 ++--
+ lib/codex_wrapper/config.ex         | 22 +++++++++++++++++++---
+ lib/codex_wrapper/iex.ex            |  2 +-
+ test/codex_wrapper/command_test.exs | 10 ++++++++++
+ test/codex_wrapper/config_test.exs  | 23 ++++++++++++++++++-----
+ 6 files changed, 51 insertions(+), 12 deletions(-)
+
+diff --git a/README.md b/README.md
+index 81c5187..424ca91 100644
+--- a/README.md
++++ b/README.md
+@@ -627,7 +627,7 @@ Exception metadata adds the standard `:kind`, `:reason`, and
+ | `:working_dir` | `String.t()` | Working directory for the subprocess |
+ | `:env` | `[{String.t(), String.t()}]` | Environment variables |
+ | `:timeout` | `pos_integer()` | Command timeout in milliseconds |
+-| `:verbose` | `boolean()` | Enable verbose output |
++| `:verbose` | `boolean()` | Compatibility option: only `false` is supported; `true` raises before CLI execution |
+ 
+ ### Runners: process-group cleanup with forcola
+ 
+diff --git a/lib/codex_wrapper.ex b/lib/codex_wrapper.ex
+index 18d09c9..52293f3 100644
+--- a/lib/codex_wrapper.ex
++++ b/lib/codex_wrapper.ex
+@@ -91,7 +91,7 @@ defmodule CodexWrapper do
+     * `:working_dir` - Working directory
+     * `:env` - Environment variables
+     * `:timeout` - Timeout in ms
+-    * `:verbose` - Enable verbose output
++    * `:verbose` - Compatibility option: only `false` is supported; `true` raises
+ 
+   Exec options (passed to `Exec` builder):
+     * `:model` - Model name
+@@ -170,7 +170,7 @@ defmodule CodexWrapper do
+     * `:working_dir` - Working directory
+     * `:env` - Environment variables
+     * `:timeout` - Timeout in ms
+-    * `:verbose` - Enable verbose output
++    * `:verbose` - Compatibility option: only `false` is supported; `true` raises
+ 
+   Review options (passed to `Review` builder):
+     * `:prompt` - Additional review context
+diff --git a/lib/codex_wrapper/config.ex b/lib/codex_wrapper/config.ex
+index 13b009d..98d404a 100644
+--- a/lib/codex_wrapper/config.ex
++++ b/lib/codex_wrapper/config.ex
+@@ -36,16 +36,21 @@ defmodule CodexWrapper.Config do
+     * `:working_dir` - Working directory for the subprocess
+     * `:env` - List of `{key, value}` environment variable tuples
+     * `:timeout` - Command timeout in milliseconds
+-    * `:verbose` - Enable verbose output
++    * `:verbose` - Compatibility option. Only `false` is supported; `true` raises
++      `ArgumentError` before the CLI is launched, because the Codex CLI does not
++      define a `--verbose` flag
+   """
+   @spec new(keyword()) :: t()
+   def new(opts \\ []) do
++    verbose = Keyword.get(opts, :verbose, false)
++    validate_verbose!(verbose)
++
+     %__MODULE__{
+       binary: opts[:binary] || find_binary(),
+       working_dir: opts[:working_dir],
+       env: opts[:env] || [],
+       timeout: opts[:timeout],
+-      verbose: Keyword.get(opts, :verbose, false)
++      verbose: verbose
+     }
+   end
+ 
+@@ -66,10 +71,21 @@ defmodule CodexWrapper.Config do
+ 
+   @doc """
+   Build the base command args from config (global flags).
++
++  Currently always empty. Raises `ArgumentError` if `verbose: true` was set
++  on a directly constructed or updated struct.
+   """
+   @spec base_args(t()) :: [String.t()]
+   def base_args(%__MODULE__{} = config) do
+-    if config.verbose, do: ["--verbose"], else: []
++    validate_verbose!(config.verbose)
++    []
++  end
++
++  defp validate_verbose!(verbose) when verbose in [false, nil], do: :ok
++
++  defp validate_verbose!(_verbose) do
++    raise ArgumentError,
++          "verbose: true is unsupported: the Codex CLI does not define --verbose"
+   end
+ 
+   @doc """
+diff --git a/lib/codex_wrapper/iex.ex b/lib/codex_wrapper/iex.ex
+index 7d4b527..f946a45 100644
+--- a/lib/codex_wrapper/iex.ex
++++ b/lib/codex_wrapper/iex.ex
+@@ -45,7 +45,7 @@ defmodule CodexWrapper.IEx do
+   Start a new conversation. Prints the response.
+ 
+   Accepts all options from `CodexWrapper.exec/2` -- config options
+-  (`:working_dir`, `:binary`, `:env`, `:timeout`, `:verbose`)
++  (`:working_dir`, `:binary`, `:env`, `:timeout`, and `:verbose`, where only `false` is supported)
+   and exec options (`:model`, `:sandbox`, `:approval_policy`, etc.).
+   """
+   def chat(prompt, opts \\ []) do
+diff --git a/test/codex_wrapper/command_test.exs b/test/codex_wrapper/command_test.exs
+index 7a36cb6..41b0729 100644
+--- a/test/codex_wrapper/command_test.exs
++++ b/test/codex_wrapper/command_test.exs
+@@ -34,6 +34,16 @@ defmodule CodexWrapper.CommandTest do
+     def parse_output(_stdout, code), do: {:error, {:exit, code}}
+   end
+ 
++  describe "unsupported verbose" do
++    test "run/3 raises before launching the binary when verbose is true" do
++      config = %Config{binary: "/nonexistent/codex-must-not-run", verbose: true}
++
++      assert_raise ArgumentError, ~r/--verbose/, fn ->
++        Command.run(EchoCommand, %EchoCommand{}, config)
++      end
++    end
++  end
++
+   describe "run/3" do
+     test "executes command and parses output" do
+       config = Config.new(binary: "sh")
+diff --git a/test/codex_wrapper/config_test.exs b/test/codex_wrapper/config_test.exs
+index 5c723d5..be6da81 100644
+--- a/test/codex_wrapper/config_test.exs
++++ b/test/codex_wrapper/config_test.exs
+@@ -14,9 +14,9 @@ defmodule CodexWrapper.ConfigTest do
+     end
+ 
+     test "with explicit options" do
+-      config = Config.new(working_dir: "/tmp", verbose: true, timeout: 5000)
++      config = Config.new(working_dir: "/tmp", verbose: false, timeout: 5000)
+       assert config.working_dir == "/tmp"
+-      assert config.verbose == true
++      assert config.verbose == false
+       assert config.timeout == 5000
+     end
+ 
+@@ -31,6 +31,14 @@ defmodule CodexWrapper.ConfigTest do
+     end
+   end
+ 
++  describe "unsupported verbose" do
++    test "new/1 rejects verbose: true" do
++      assert_raise ArgumentError, ~r/verbose: true is unsupported/, fn ->
++        Config.new(verbose: true)
++      end
++    end
++  end
++
+   describe "find_binary/0" do
+     test "falls back to codex when not in PATH or env" do
+       original = System.get_env("CODEX_CLI")
+@@ -63,9 +71,14 @@ defmodule CodexWrapper.ConfigTest do
+       assert Config.base_args(config) == []
+     end
+ 
+-    test "includes verbose flag" do
+-      config = Config.new(verbose: true)
+-      assert Config.base_args(config) == ["--verbose"]
++    test "never emits --verbose" do
++      assert Config.base_args(Config.new(verbose: false)) == []
++    end
++
++    test "rejects verbose: true on a directly built struct" do
++      assert_raise ArgumentError, ~r/--verbose/, fn ->
++        Config.base_args(%Config{binary: "codex", verbose: true})
++      end
+     end
+   end
