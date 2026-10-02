@@ -9,7 +9,8 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
   Parameters come from the catalogue. String and integer parameters take one
   value; list parameters repeat (`--prompts a --prompts b`); object parameters
   take JSON or `@path/to/file.json`. Parameter names use underscores, as in
-  `--timeout_ms`. Output is a JSON document on stdout; errors exit non-zero
+  `--timeout_ms` (the hyphenated `--timeout-ms` spelling also works). Output is
+  a JSON document on stdout; errors exit non-zero
   with the error JSON on stderr. On a fresh build, Mix can print compilation
   notices before the task starts; use `MIX_QUIET=1` when parsing stdout.
 
@@ -75,6 +76,15 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
         {String.to_atom(p.name), if(p.type == :string_list, do: :keep, else: :string)}
       end)
 
+    # OptionParser accepts --timeout-ms for :timeout_ms, but rejects the
+    # catalogue's documented --timeout_ms spelling. Normalize only declared
+    # switches; leave values and unknown options untouched.
+    aliases =
+      Map.new(op.params, fn p ->
+        {"--" <> p.name, "--" <> String.replace(p.name, "_", "-")}
+      end)
+
+    argv = Enum.map(argv, &normalize_switch(&1, aliases))
     {parsed, rest, invalid} = OptionParser.parse(argv, strict: switches)
 
     if rest != [] or invalid != [] do
@@ -86,6 +96,13 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
     parsed
     |> Enum.group_by(fn {k, _} -> Atom.to_string(k) end, fn {_, v} -> v end)
     |> Map.new(fn {key, values} -> {key, convert!(by_name[key], values)} end)
+  end
+
+  defp normalize_switch(arg, aliases) do
+    case String.split(arg, "=", parts: 2) do
+      [name, value] -> Map.get(aliases, name, name) <> "=" <> value
+      [name] -> Map.get(aliases, name, name)
+    end
   end
 
   defp convert!(%{type: :string_list}, values), do: values
