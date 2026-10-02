@@ -12,6 +12,8 @@ unless File.dir?(cwd), do: raise("project directory does not exist: #{cwd}")
 
 name = "review-pipeline-#{System.unique_integer([:positive])}"
 simple = GenAgentEnsemble.Agents.Simple
+{:ok, codex_opts} = GenAgentServer.Providers.backend_opts("codex", cwd: cwd)
+{:ok, claude_opts} = GenAgentServer.Providers.backend_opts("claude", cwd: cwd)
 
 {:ok, _pid} =
   GenAgentServer.start_pattern_instance(
@@ -19,14 +21,13 @@ simple = GenAgentEnsemble.Agents.Simple
     "review",
     GenAgentEnsemble.Strategies.Pipeline,
     stages: [
-      {"codex-draft", simple,
-       backend: GenAgent.Backends.Codex, cwd: cwd, sandbox: :read_only, approval_policy: :never},
+      {"codex-draft", simple, codex_opts},
       {"claude-verify", simple,
-       backend: GenAgent.Backends.Claude,
-       cwd: cwd,
-       permission_mode: :plan,
-       system_prompt:
-         "You are the verification stage in a code-review pipeline. The user text is the previous agent's draft. Check its concrete claims against files in the current repository. Do not edit files. Return VERIFIED or CORRECTED, followed by concise evidence and file locations. State clearly what you could not verify."}
+       claude_opts ++
+         [
+           system_prompt:
+             "You are the verification stage in a code-review pipeline. The user text is the previous agent's draft. Check its concrete claims against files in the current repository. Do not edit files. Return VERIFIED or CORRECTED, followed by concise evidence and file locations. State clearly what you could not verify."
+         ]}
     ]
   )
 
