@@ -251,10 +251,13 @@ in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `result`,
 and `ask`, plus the lifecycle tools `create_instance`, `describe_instance`, and
 `stop_instance`. Nothing else is reachable, including `run_pattern`, jobs, and
 arbitrary pattern specs. `invoke` and `ask` record telemetry source `:mcp`.
-On connection the server advertises brief usage instructions and serves
-`gen-agent://guide/quickstart` as a Markdown MCP resource, so an interactive
-client can discover the lifecycle and safety defaults without a local copy of
-this README.
+On connection the server advertises brief usage instructions that point to
+`gen-agent://guide/index`. The index links to four curated Markdown resources:
+`quickstart` for creating routes and choosing models, `invocations` for
+`ask` versus `invoke`/`result`, `scope` for connection and instance lifetime,
+and `capabilities` for the exact MCP boundary. These resources are packaged in
+the release and are read-only guidance; they do not activate skills or grant
+access to any additional operation.
 
 The MCP process starts its own application, with its own instances and result
 store. Invocation IDs and results last for that MCP session and are not shared

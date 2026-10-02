@@ -12,13 +12,35 @@ defmodule GenAgentServer.MCPTest do
     %{client: client}
   end
 
-  test "discovery introduces the lifecycle and serves the quickstart", %{client: client} do
+  @guide_uris ~w(
+    gen-agent://guide/capabilities
+    gen-agent://guide/index
+    gen-agent://guide/invocations
+    gen-agent://guide/quickstart
+    gen-agent://guide/scope
+  )
+
+  test "discovery introduces the lifecycle and serves the curated guide catalogue", %{
+    client: client
+  } do
     assert {:ok, discovery} = Snodo.Client.discover(client)
     assert discovery["instructions"] =~ "create_instance"
-    assert discovery["instructions"] =~ "gen-agent://guide/quickstart"
+    assert discovery["instructions"] =~ "gen-agent://guide/index"
 
     assert {:ok, resources} = Snodo.Client.list_resources(client)
-    assert Enum.map(resources, & &1["uri"]) == ["gen-agent://guide/quickstart"]
+    assert resources |> Enum.map(& &1["uri"]) |> Enum.sort() == @guide_uris
+
+    for uri <- @guide_uris do
+      assert {:ok, %{"contents" => [%{"text" => text, "mimeType" => "text/markdown"}]}} =
+               Snodo.Client.read_resource(client, uri)
+
+      assert String.length(text) > 100
+    end
+
+    assert {:ok, %{"contents" => [%{"text" => index}]}} =
+             Snodo.Client.read_resource(client, "gen-agent://guide/index")
+
+    assert Enum.all?(@guide_uris -- ["gen-agent://guide/index"], &String.contains?(index, &1))
 
     assert {:ok, %{"contents" => [%{"text" => guide, "mimeType" => "text/markdown"}]}} =
              Snodo.Client.read_resource(client, "gen-agent://guide/quickstart")
@@ -26,6 +48,21 @@ defmodule GenAgentServer.MCPTest do
     assert guide =~ "to a read-only sandbox"
     assert guide =~ "invoke"
     assert guide =~ "result"
+
+    assert {:error, _} = Snodo.Client.read_resource(client, "gen-agent://guide/unknown")
+    assert {:error, _} = Snodo.Client.read_resource(client, "file:///tmp/secret")
+  end
+
+  test "initialize-era clients receive the guide index and the same allowlisted resources" do
+    {:ok, legacy} = Snodo.Client.direct(MCP.Server.runtime(), protocol: "2025-11-25")
+    assert legacy.session.instructions =~ "gen-agent://guide/index"
+    assert {:ok, resources} = Snodo.Client.list_resources(legacy)
+    assert resources |> Enum.map(& &1["uri"]) |> Enum.sort() == @guide_uris
+
+    assert {:ok, %{"contents" => [%{"text" => index}]}} =
+             Snodo.Client.read_resource(legacy, "gen-agent://guide/index")
+
+    assert index =~ "ask"
   end
 
   test "the catalogue is exactly the allowlisted operations", %{client: client} do
@@ -241,8 +278,15 @@ defmodule GenAgentServer.MCPTest do
         }
       })
 
-      assert %{"result" => %{"serverInfo" => %{"name" => "gen-agent-server"}}} =
+      assert %{
+               "result" => %{
+                 "serverInfo" => %{"name" => "gen-agent-server"},
+                 "instructions" => instructions
+               }
+             } =
                read_response(port, 1)
+
+      assert instructions =~ "gen-agent://guide/index"
 
       send_message(port, %{"jsonrpc" => "2.0", "method" => "notifications/initialized"})
       send_message(port, %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"})
