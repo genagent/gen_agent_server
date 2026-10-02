@@ -16,7 +16,7 @@ defmodule GenAgentServer.Ops do
   Adapters that expose operations to less trusted callers can filter on it.
   """
 
-  alias GenAgentServer.{PatternSpec, Run}
+  alias GenAgentServer.{PatternSpec, PublicSource, Run}
 
   defmodule Op do
     @moduledoc false
@@ -116,6 +116,45 @@ defmodule GenAgentServer.Ops do
       op("patterns", "List the pattern names that run_pattern accepts.", false, [], fn _ ->
         {:ok, %{patterns: PatternSpec.patterns()}}
       end),
+      op(
+        "public_revision",
+        "Resolve a public GitHub repository's default branch to its current commit SHA.",
+        false,
+        [req("repository", :string, "Public GitHub owner/repo")],
+        fn a -> PublicSource.revision(a["repository"]) end
+      ),
+      op(
+        "public_file",
+        "Read a bounded UTF-8 source file from an exact public GitHub commit.",
+        false,
+        [
+          req("repository", :string, "Public GitHub owner/repo"),
+          req("sha", :string, "Full 40-character commit SHA"),
+          req("path", :string, "Relative source file path (up to 128 KiB)")
+        ],
+        fn a -> PublicSource.file(a["repository"], a["sha"], a["path"]) end
+      ),
+      op(
+        "public_issues",
+        "Search up to 20 public GitHub issue titles and return their current states.",
+        false,
+        [
+          req("repository", :string, "Public GitHub owner/repo"),
+          req("query", :string, "Plain title search terms (up to 128 characters)"),
+          opt("state", :string, "all, open, or closed (default: all)")
+        ],
+        fn a -> PublicSource.issues(a["repository"], a["query"], a["state"] || "all") end
+      ),
+      op(
+        "public_issue",
+        "Read a specific public GitHub issue for an exact duplicate check.",
+        false,
+        [
+          req("repository", :string, "Public GitHub owner/repo"),
+          req("number", :integer, "Issue number")
+        ],
+        fn a -> PublicSource.issue(a["repository"], a["number"]) end
+      ),
       op(
         "run_pattern",
         "Run an Ensemble pattern spec in a temporary instance and return every result.",

@@ -12,6 +12,7 @@ defmodule GenAgentServer.MCP.Server do
         "Read gen-agent://guide/index for focused operating guides. " <>
         "Use instances and describe_instance to inspect state; create_instance to select " <>
         "providers, models, and project directories; invoke then result for long turns. " <>
+        "Use public_revision, public_file, public_issues, and public_issue for current public GitHub context. " <>
         "Instances and results belong to this MCP process and disappear when it exits.",
     protocols: [
       Snodo.Protocol.V2026_07_28,
@@ -28,10 +29,15 @@ defmodule GenAgentServer.MCP.Server do
   tool(GenAgentServer.MCP.Tools.CreateInstance)
   tool(GenAgentServer.MCP.Tools.DescribeInstance)
   tool(GenAgentServer.MCP.Tools.StopInstance)
+  tool(GenAgentServer.MCP.Tools.PublicRevision)
+  tool(GenAgentServer.MCP.Tools.PublicFile)
+  tool(GenAgentServer.MCP.Tools.PublicIssues)
+  tool(GenAgentServer.MCP.Tools.PublicIssue)
 
   resource(GenAgentServer.MCP.Resources.Index)
   resource(GenAgentServer.MCP.Resources.Quickstart)
   resource(GenAgentServer.MCP.Resources.Invocations)
   resource(GenAgentServer.MCP.Resources.Scope)
   resource(GenAgentServer.MCP.Resources.Capabilities)
+  resource(GenAgentServer.MCP.Resources.PublicSource)
 end

@@ -4,7 +4,9 @@ defmodule GenAgentServer.MCP do
 
   The catalogue is an allowlist: `instances`, `agents`, `status`, `invoke`,
   `result`, `ask`, and the lifecycle tools `create_instance`,
-  `describe_instance`, and `stop_instance`. Every other operation, including
+  `describe_instance`, and `stop_instance`, plus read-only public GitHub
+  source tools `public_revision`, `public_file`, `public_issues`, and `public_issue`.
+  Every other operation, including
   `run_pattern`, jobs, and arbitrary pattern specs, stays unreachable from MCP.
   `invoke` and `ask` record telemetry source `:mcp`.
 
@@ -38,7 +40,7 @@ defmodule GenAgentServer.MCP do
 
   alias GenAgentServer.Ops
 
-  @tools ~w(instances agents status invoke result ask create_instance describe_instance stop_instance)
+  @tools ~w(instances agents status invoke result ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue)
 
   @doc "Names of the operations exposed over MCP."
   def tools, do: @tools
