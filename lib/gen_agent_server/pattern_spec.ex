@@ -55,8 +55,9 @@ defmodule GenAgentServer.PatternSpec do
 
   @doc """
   Parse `spec`. `opts` supplies defaults for agent entries: `:cwd`,
-  `:codex_sandbox`, `:claude_permission_mode`. The spec keys `"cwd"`,
-  `"codex_sandbox"` (`"read_only"` or `"workspace_write"`), and
+  `:codex_sandbox`, `:codex_user_config`, `:claude_permission_mode`. The spec keys `"cwd"`,
+  `"codex_sandbox"` (`"read_only"` or `"workspace_write"`),
+  `"codex_user_config"` (`"ignore"` or `"inherit"`), and
   `"claude_permission_mode"` (`"plan"` or `"accept_edits"`) override them.
   Both CLI providers are read-only unless a spec opts in.
   """
@@ -142,12 +143,17 @@ defmodule GenAgentServer.PatternSpec do
     end
   end
 
-  # Edit modes are opt-in and limited to the choices profiles allow.
+  # Provider modes are limited to the choices profiles allow.
   defp edit_modes(spec, opts) do
     with {:ok, opts} <-
            edit_mode(spec, opts, "codex_sandbox", %{
              "read_only" => :read_only,
              "workspace_write" => :workspace_write
+           }),
+         {:ok, opts} <-
+           edit_mode(spec, opts, "codex_user_config", %{
+             "ignore" => :ignore,
+             "inherit" => :inherit
            }) do
       edit_mode(spec, opts, "claude_permission_mode", %{
         "plan" => :plan,
@@ -208,7 +214,7 @@ defmodule GenAgentServer.PatternSpec do
 
     provider_opts =
       opts
-      |> Keyword.take([:cwd, :codex_sandbox, :claude_permission_mode])
+      |> Keyword.take([:cwd, :codex_sandbox, :codex_user_config, :claude_permission_mode])
       |> put_model(entry)
 
     cond do
