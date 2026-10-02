@@ -295,6 +295,35 @@ MIX_ENV=prod mix release
 }
 ```
 
+For Codex, the equivalent `config.toml` entry can approve discovery and result
+reads while asking before a turn is submitted:
+
+```toml
+[mcp_servers.gen_agent_server]
+command = "/path/to/gen_agent_server/_build/prod/rel/gen_agent_server/bin/gen_agent_server"
+args = ["eval", "GenAgentServer.MCP.serve()"]
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.gen_agent_server.tools.instances]
+approval_mode = "approve"
+
+[mcp_servers.gen_agent_server.tools.agents]
+approval_mode = "approve"
+
+[mcp_servers.gen_agent_server.tools.status]
+approval_mode = "approve"
+
+[mcp_servers.gen_agent_server.tools.result]
+approval_mode = "approve"
+```
+
+`invoke` and `ask` still request approval in this example because they start
+provider work. In non-interactive `codex exec` runs with approvals disabled,
+those calls fail unless the operator explicitly allows the specific tools in
+that run's configuration. The MCP process inherits the server environment;
+set `GEN_AGENT_SERVER_PROVIDERS`, `GEN_AGENT_SERVER_CWD`, or
+`GEN_AGENT_SERVER_CONFIG` for the projects and routes you want it to host.
+
 A session-to-session mailbox, HTTP transport, and broader control operations
 are follow-on work, as is a dashboard.
 
