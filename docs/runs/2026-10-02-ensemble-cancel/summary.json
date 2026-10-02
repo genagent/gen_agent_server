@@ -1,0 +1,59 @@
+{
+  "instance": "handoff/6213",
+  "project": "/tmp/gen_agent_issue_259_cancel",
+  "stages": {
+    "implement": {
+      "usage": {
+        "cached_input_tokens": 171136,
+        "input_tokens": 195529,
+        "output_tokens": 1828
+      },
+      "session_id": "01a0fb24-fc24-7e01-90af-14f2d55caf85",
+      "provider": "codex",
+      "elapsed_ms": 87433,
+      "stage": "implement",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": 2472
+      },
+      "session_id": "67912b09-a72a-43ed-9ae1-e59bf6f16696",
+      "provider": "claude",
+      "elapsed_ms": 23564,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "521f62d9ff619fcb01c20d35a8fc5bf2ec02563f",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/README.md",
+    "extensions/ensemble/lib/gen_agent_ensemble.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/queue.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/server.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/debate.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/pipeline.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/pool.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/solo.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/supervisor.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/switchboard.ex",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategy.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/cancel_test.exs"
+  ],
+  "untracked_files": []
+}

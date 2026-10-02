@@ -31,6 +31,12 @@ recorded separately from a model verdict; and a staged issue can produce a
 verified first slice while its parent issue remains open for explicit code
 dependencies. These are host workflow states, not extra prompt instructions.
 
+The [#259 cancellation run](runs/2026-10-02-ensemble-cancel/README.md) used a
+bounded `revise` round after an approving model review missed strict Credo
+failures and a child-call timeout risk. Preserve the original review and
+pass the exact host failure into the next edit stage; approval, mechanical
+verification, and PR acceptance remain distinct results.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for
