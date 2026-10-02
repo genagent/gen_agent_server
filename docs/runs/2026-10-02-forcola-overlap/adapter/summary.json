@@ -1,0 +1,52 @@
+{
+  "instance": "handoff/6210",
+  "project": "/tmp/gen_agent_forcola_196",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 25,
+        "output_tokens": 1894
+      },
+      "session_id": "474c1e31-f716-453a-8697-02efe904aba9",
+      "provider": "claude",
+      "elapsed_ms": 19528,
+      "stage": "implement",
+      "requested_model": "haiku",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 37120,
+        "input_tokens": 54458,
+        "output_tokens": 807
+      },
+      "session_id": "01a0fc96-9e1d-7541-a25d-4e78c8b8e6cb",
+      "provider": "codex",
+      "elapsed_ms": 20323,
+      "stage": "review",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 42240,
+        "input_tokens": 51096,
+        "output_tokens": 671
+      },
+      "session_id": "01a0fc96-1014-7fb3-900b-97fc61a4e4f8",
+      "provider": "codex",
+      "elapsed_ms": 17273,
+      "stage": "triage",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    }
+  },
+  "base_commit": "02e6e0134d87098e6e87f5fd09883ea69e674097",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "integrations/codex/README.md",
+    "integrations/codex/lib/gen_agent/backends/codex.ex",
+    "integrations/codex/mix.exs"
+  ],
+  "untracked_files": []
+}

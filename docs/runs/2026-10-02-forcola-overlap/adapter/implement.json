@@ -1,0 +1,12 @@
+{
+  "usage": {
+    "input_tokens": 25,
+    "output_tokens": 1894
+  },
+  "session_id": "474c1e31-f716-453a-8697-02efe904aba9",
+  "provider": "claude",
+  "elapsed_ms": 19528,
+  "stage": "implement",
+  "requested_model": "haiku",
+  "model": "claude-haiku-4-5-20251001"
+}

@@ -165,3 +165,16 @@ publish `Response.metadata` before Ensemble may require and use it. An
 optional control API should track dependent release gates as well as tests,
 reviews and PR state; it must not equate a locally green branch with a
 publishable package.
+
+The [#196 wrapper and adapter runs](runs/2026-10-02-forcola-overlap/README.md) add a
+useful cross-package gate: resolve disposable consumer projects with the
+actual Hex versions and exercise the optional runtime path. The adapter
+follow-up used a small Claude Haiku implementation and Codex Luna review;
+the caller separately refreshed its lock and tested both published backends.
+A source-level
+version-string assertion would repeat the implementation without proving
+that two wrappers can coexist. The first review asked for that evidence;
+the caller updated the lockfile and ran the consumers before a second review.
+The reusable control layer could retain external validation results and all
+review rounds alongside stage artifacts, without deciding that every reviewer
+request implies a source test.
