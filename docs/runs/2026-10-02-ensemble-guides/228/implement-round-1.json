@@ -1,0 +1,12 @@
+{
+  "usage": {
+    "input_tokens": 16,
+    "output_tokens": 8437
+  },
+  "session_id": "538f48c8-e7c1-41ae-babc-5f882066e34a",
+  "provider": "claude",
+  "elapsed_ms": 48595,
+  "stage": "implement",
+  "requested_model": "sonnet",
+  "model": "claude-sonnet-5-5"
+}

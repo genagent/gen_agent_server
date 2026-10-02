@@ -1,0 +1,49 @@
+{
+  "instance": "handoff/6212",
+  "project": "/tmp/gen_agent_issue_228_20261002b",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 164992,
+        "input_tokens": 213376,
+        "output_tokens": 1104
+      },
+      "session_id": "01a0fc5a-25f9-7900-a8af-7818672878b3",
+      "provider": "codex",
+      "elapsed_ms": 58821,
+      "stage": "review",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "80c44d79fb39f56018102705fe7f85559c89471a",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/guides/workflows/consensus.md",
+    "extensions/ensemble/guides/workflows/debate.md",
+    "extensions/ensemble/guides/workflows/pipeline.md",
+    "extensions/ensemble/guides/workflows/supervisor.md",
+    "extensions/ensemble/test/gen_agent_ensemble/workflow_guides_test.exs"
+  ],
+  "untracked_files": []
+}

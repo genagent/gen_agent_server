@@ -1,0 +1,45 @@
+{
+  "instance": "handoff/3208",
+  "project": "/tmp/gen_agent_issue_205_20261002b",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 14,
+        "output_tokens": 3913
+      },
+      "session_id": "49a079c3-0e61-4790-82d1-7d6270482cf6",
+      "provider": "claude",
+      "elapsed_ms": 34530,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "80c44d79fb39f56018102705fe7f85559c89471a",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/lib/gen_agent_ensemble/strategy.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/server_test.exs"
+  ],
+  "untracked_files": []
+}

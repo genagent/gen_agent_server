@@ -145,3 +145,13 @@ missing dependencies after the model review and ran root package gates and
 Dialyzer independently. This supports a reusable claim/checkout/handoff/
 validate/PR pattern, while package-specific acceptance commands and the
 choice to skip already-resolved findings remain caller decisions.
+
+The [#205/#228 Ensemble documentation runs](runs/2026-10-02-ensemble-guides/README.md)
+show two distinct reviewer outcomes: source review caught incorrect claims
+about `Config.Reader` and callback exception handling, but a later review
+incorrectly predicted a test would exit without `trap_exit`. The host test
+passed directly and the final review accepted that evidence. The caller
+removed Markdown substring assertions in favor of executable config and
+status checks. A control API should preserve each review finding, its
+verification result, and stage attempt metadata separately; an approval or
+request-changes line alone cannot represent this history.
