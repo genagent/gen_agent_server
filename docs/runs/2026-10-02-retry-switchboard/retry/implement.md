@@ -1,0 +1,8 @@
+I edited the guide and the test file, but I couldn't format or run anything: Bash approval was denied for both `mix format` and `mix test`. The new tests are therefore unrun, and `test/guides/retry_test.exs` is not yet formatted. The caller needs to run `mix format test/guides/retry_test.exs` and then the test file.
+
+Files changed: `guides/patterns/retry.md` and `test/guides/retry_test.exs`.
+
+- **P2, `interrupt/1` does not cancel backoff (guide line 30):** Fixed. The guide now says `interrupt/1` is a no-op while the agent is idle in backoff, and that `:cancel_retry` is the event to send. The "Using it" section says the same, plus that cancelling halts with `phase: :cancelled` and an in-flight timer message is ignored because its token no longer matches. A new runtime test shows that interrupting during `:waiting` is ignored and the retry still runs.
+- **P2, backoff progression (line 79):** Fixed. "backoff doubles per attempt" now runs the real `Retry.Agent` with a 50 ms base backoff and `fail_first: 3`. It measures the gaps between prompts and checks they are about 50, 100 and 200 ms, with a tolerance for scheduling slack. A constant or zero delay would now fail.
+- **P2, stale-token delivery (line 101):** Fixed. A new test reads the pending token during backoff, cancels with `:cancel_retry`, then notifies `{:retry, token}`. It asserts that no prompt starts and the agent stays `:cancelled` with `attempts: 1`.
+- **P2, formatting (line 71):** Not fixed. `mix format` was denied, so the file is still unformatted.
