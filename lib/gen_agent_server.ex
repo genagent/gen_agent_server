@@ -36,6 +36,45 @@ defmodule GenAgentServer do
     )
   end
 
+  @doc """
+  Start a switchboard instance from a JSON-safe configuration.
+
+  The configuration is validated by `GenAgentServer.InstanceSpec` before
+  anything starts and is fixed for the life of the instance. Returns the same
+  description as `describe_instance/1`, or `{:error, :instance_exists}`,
+  `{:error, {:invalid_instance_name, name}}`, `{:error, {:invalid_config,
+  detail}}`, or `{:error, :instance_start_failed}`.
+  """
+  def create_instance(name, config) when is_binary(name) and is_map(config) do
+    with {:ok, spec} <- GenAgentServer.InstanceSpec.parse(name, config),
+         :ok <- ensure_absent(name) do
+      opts = Keyword.put(spec.opts, :description, spec.description)
+
+      case start_instance(name, spec.agents, opts) do
+        {:ok, _pid} -> describe_instance(name)
+        {:error, {:already_started, _pid}} -> {:error, :instance_exists}
+        {:error, _reason} -> {:error, :instance_start_failed}
+      end
+    end
+  end
+
+  defp ensure_absent(name) do
+    case Registry.lookup(GenAgentServer.Registry, {:instance, name}) do
+      [] -> :ok
+      _ -> {:error, :instance_exists}
+    end
+  end
+
+  @doc """
+  Routes, selected providers, models, efforts, and limits of an instance.
+
+  Instances not started by `create_instance/2` report `configured: false` and
+  route names only; their backend options are not exposed.
+  """
+  def describe_instance(name \\ session_name()) when is_binary(name) do
+    GenAgentServer.Invocations.describe(name)
+  end
+
   def stop_instance(name) when is_binary(name) do
     if name == session_name() do
       {:error, :default_instance}

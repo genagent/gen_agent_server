@@ -1,0 +1,13 @@
+{
+  "project": "/tmp/gen_agent_server_claude_023",
+  "issue": "/tmp/gen_agent_mcp_control_task.md",
+  "instructions": "/tmp/gen_agent_mcp_control_final_notes.md",
+  "out": "/tmp/gen_agent_mcp_control_final_review",
+  "timeout_ms": 1200000,
+  "review_only": true,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-astra"},
+    "implement": {"provider": "claude", "model": "sonnet"},
+    "review": {"provider": "codex", "model": "gpt-6-astra"}
+  }
+}

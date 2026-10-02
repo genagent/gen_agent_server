@@ -138,4 +138,62 @@ defmodule GenAgentServer.MCP.Tools do
     @impl true
     def call(arguments, _context), do: GenAgentServer.MCP.run("ask", arguments)
   end
+
+  # The lifecycle tools take their schema from the operation itself, so the
+  # nested creation config cannot drift from GenAgentServer.Ops.
+
+  defmodule CreateInstance do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "create_instance",
+      description:
+        "Create a named instance with one or more provider routes (echo, claude, codex). " <>
+          "Configuration is fixed at creation and held only in memory. Nothing runs until a prompt is submitted."
+
+    input_schema(
+      "create_instance"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("create_instance", arguments)
+  end
+
+  defmodule DescribeInstance do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "describe_instance",
+      description:
+        "Describe an instance: routes with provider, model, effort, and access mode, plus limits."
+
+    input_schema(
+      "describe_instance"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("describe_instance", arguments)
+  end
+
+  defmodule StopInstance do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "stop_instance",
+      description:
+        "Stop a runtime instance (not the default instance). Its routes and stored results are discarded."
+
+    input_schema(
+      "stop_instance"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("stop_instance", arguments)
+  end
 end

@@ -3,11 +3,29 @@ defmodule GenAgentServer.MCPTest do
 
   alias GenAgentServer.{MCP, Ops}
 
-  @tool_names ~w(agents ask instances invoke result status)
+  @legacy_tool_names ~w(agents ask instances invoke result status)
+  @lifecycle_tool_names ~w(create_instance describe_instance stop_instance)
+  @tool_names Enum.sort(@legacy_tool_names ++ @lifecycle_tool_names)
 
   setup do
     {:ok, client} = Snodo.Client.direct(MCP.Server.runtime())
     %{client: client}
+  end
+
+  test "discovery introduces the lifecycle and serves the quickstart", %{client: client} do
+    assert {:ok, discovery} = Snodo.Client.discover(client)
+    assert discovery["instructions"] =~ "create_instance"
+    assert discovery["instructions"] =~ "gen-agent://guide/quickstart"
+
+    assert {:ok, resources} = Snodo.Client.list_resources(client)
+    assert Enum.map(resources, & &1["uri"]) == ["gen-agent://guide/quickstart"]
+
+    assert {:ok, %{"contents" => [%{"text" => guide, "mimeType" => "text/markdown"}]}} =
+             Snodo.Client.read_resource(client, "gen-agent://guide/quickstart")
+
+    assert guide =~ "to a read-only sandbox"
+    assert guide =~ "invoke"
+    assert guide =~ "result"
   end
 
   test "the catalogue is exactly the allowlisted operations", %{client: client} do
@@ -22,8 +40,32 @@ defmodule GenAgentServer.MCPTest do
       assert field(tool, "inputSchema", :input_schema) == Ops.json_schema(op)
     end
 
-    refute Enum.any?(~w(run_pattern stop_instance run_job jobs patterns), &(&1 in @tool_names))
+    refute Enum.any?(~w(run_pattern run_job jobs patterns), &(&1 in @tool_names))
+
+    descriptions =
+      Map.new(tools, &{field(&1, "name", :name), field(&1, "description", :description)})
+
+    assert descriptions["create_instance"] =~ "Nothing runs until a prompt is submitted"
+    assert descriptions["stop_instance"] =~ "stored results are discarded"
   end
+
+  test "the original six tools keep their schemas", %{client: client} do
+    {:ok, listed} = Snodo.Client.list_tools(client)
+
+    for tool <- plain(listed), field(tool, "name", :name) in @legacy_tool_names do
+      assert get_in(field(tool, "inputSchema", :input_schema), ["properties"])
+             |> Map.keys()
+             |> Enum.sort() ==
+               legacy_properties(field(tool, "name", :name))
+    end
+  end
+
+  defp legacy_properties("agents"), do: ["instance"]
+  defp legacy_properties("status"), do: ["instance"]
+  defp legacy_properties("instances"), do: []
+  defp legacy_properties("invoke"), do: ["agent", "instance", "prompt"]
+  defp legacy_properties("result"), do: ["id", "instance"]
+  defp legacy_properties("ask"), do: ["agent", "instance", "prompt", "timeout_ms"]
 
   test "discovers instances and routes", %{client: client} do
     default = GenAgentServer.session_name()
@@ -71,7 +113,7 @@ defmodule GenAgentServer.MCPTest do
   end
 
   test "operations outside the allowlist are not callable", %{client: client} do
-    for name <- ~w(run_pattern stop_instance run_job jobs patterns) do
+    for name <- ~w(run_pattern run_job jobs patterns) do
       case Snodo.Client.call_tool(client, name, %{"instance" => "nope"}) do
         {:error, _} -> :ok
         {:ok, result} -> assert field(plain(result), "isError", :is_error) == true

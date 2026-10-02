@@ -246,10 +246,15 @@ The release's `rpc` command remains available for direct Elixir calls.
 ## MCP (stdio)
 
 `GenAgentServer.MCP` serves a local stdio MCP server for Claude, Codex, or any
-MCP client. It exposes six tools, each backed by the operation of the same name
+MCP client. It exposes nine tools, each backed by the operation of the same name
 in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `result`,
-and `ask`. Nothing else is reachable, including `run_pattern`, `stop_instance`,
-jobs, and configuration. `invoke` and `ask` record telemetry source `:mcp`.
+and `ask`, plus the lifecycle tools `create_instance`, `describe_instance`, and
+`stop_instance`. Nothing else is reachable, including `run_pattern`, jobs, and
+arbitrary pattern specs. `invoke` and `ask` record telemetry source `:mcp`.
+On connection the server advertises brief usage instructions and serves
+`gen-agent://guide/quickstart` as a Markdown MCP resource, so an interactive
+client can discover the lifecycle and safety defaults without a local copy of
+this README.
 
 The MCP process starts its own application, with its own instances and result
 store. Invocation IDs and results last for that MCP session and are not shared
@@ -257,6 +262,84 @@ with a separately running release or `mix gen_agent_server.remote`. Providers
 come from the same environment variables as the rest of the server
 (`GEN_AGENT_SERVER_PROVIDERS`, `GEN_AGENT_SERVER_CWD`, `GEN_AGENT_SERVER_CONFIG`);
 the default is the model-free `echo` provider.
+
+### Creating agents from a client
+
+A client such as a project-manager session can create its own named switchboard
+and pick each route's provider and model:
+
+1. `create_instance` with `instance` (a name of up to 64 letters, digits, `.`,
+   `_`, `-`) and a `config` object:
+
+   ```json
+   {
+     "instance": "pm",
+     "config": {
+       "cwd": "/abs/path/to/project",
+       "max_in_flight": 4,
+       "max_results": 50,
+       "routes": [
+         {"name": "plan", "provider": "claude", "model": "opus", "effort": "high"},
+         {"name": "review", "provider": "codex", "model": "gpt-5-codex", "effort": "medium"},
+         {"name": "smoke", "provider": "echo"}
+       ]
+     }
+   }
+   ```
+
+2. `describe_instance` returns each route's provider, model, effort, cwd, and
+   access mode, plus `max_in_flight` and `max_results`. Each route object uses
+   the same keys as the creation input. Instances not created this way (the
+   default instance) report `configured: false` and route names only.
+3. `invoke` or `ask` with `instance` set to the created instance name and
+   `agent` set to a route name, then read `result`, which is repeatable until
+   evicted.
+4. `stop_instance` discards the instance and its stored results. The default
+   instance cannot be stopped.
+
+Route keys are `name`, `provider` (`echo`, `claude`, `codex`), `model`,
+`effort`, `cwd`, and the access options `claude_permission_mode` (`read_only` by
+default for dynamic routes, `plan`, or `accept_edits`), `codex_sandbox` (`read_only` by default, or
+`workspace_write`), and `codex_user_config` (`ignore` by default, or `inherit`).
+Edit modes and config inheritance are explicit per-route opt-ins. `effort` is
+`low`, `medium`, `high`, `xhigh`, or `max` for Claude, and `low`, `medium`, or
+`high` for Codex, where it is sent as the fixed `model_reasoning_effort` config
+override on both fresh and resumed turns. `echo` accepts only `name` and
+`provider`. `cwd` must be an absolute existing directory; a top-level `cwd` is
+the default for routes. Models are checked for shape only (up to 128 characters
+of letters, digits, `.`, `_`, `:`, `/`, `@`, `[`, `]`, `-`, not starting with
+`-`); the provider CLI decides whether it exists for the account. Up to 16
+routes, `max_in_flight` up to 64, and `max_results` up to 1000.
+
+For dynamic Claude routes, `read_only` uses the CLI's `dontAsk` mode with only
+Read, Grep, and Glob tools available. It honored the selected Haiku model in
+a live MCP turn. `plan` remains available, but Claude CLI 2.1.284 ignored an
+explicit `--model haiku` and used Sonnet in a live plan-mode turn. Static
+startup profiles keep their existing plan-mode default. Claude's CLI permission
+modes and tool list are not a filesystem sandbox; use a separate worktree for
+untrusted tasks.
+
+Everything is validated before anything starts, so an invalid configuration, a
+duplicate route, or a name already in use returns an error (`invalid_config`,
+`invalid_instance_name`, `instance_exists`) and starts no backend. Unknown keys
+are rejected: clients cannot supply module names, backend options, or pattern
+specs.
+
+Limitations:
+
+- The configuration is fixed at creation. To change a route's model or effort,
+  create another instance; there is no in-place mutation.
+- Each stdio client owns its own VM and result store. Creation is volatile:
+  when the client closes stdin or the process exits, instances, routes, and
+  results are gone. A new stdio process starts empty and does not reconnect to
+  an earlier one. `describe_instance` and `instances` rediscover state only
+  while the same process is still running (for example after a client
+  reconnects to a long-lived session).
+- `create_instance` does not start provider work, but the routes it creates can
+  start it when prompted, and `stop_instance` discards results that cannot be
+  recovered. Keep both on prompt approval, as with `invoke` and `ask`.
+- Arbitrary Ensemble patterns (pool, pipeline, consensus, debate) stay outside
+  this surface; use `run_pattern` from the CLI.
 
 Stdout carries only MCP protocol messages once the server starts. Logger output
 is moved to stderr, and the Mix task silences Mix's own notices.
@@ -315,10 +398,15 @@ approval_mode = "approve"
 
 [mcp_servers.gen_agent_server.tools.result]
 approval_mode = "approve"
+
+[mcp_servers.gen_agent_server.tools.describe_instance]
+approval_mode = "approve"
 ```
 
-`invoke` and `ask` still request approval in this example because they start
-provider work. In non-interactive `codex exec` runs with approvals disabled,
+`create_instance`, `stop_instance`, `invoke`, and `ask` still request approval
+in this example: the first configures future provider work, the second discards
+results, and the last two start provider work. `describe_instance` is safe to
+approve like the other read tools. In non-interactive `codex exec` runs with approvals disabled,
 those calls fail unless the operator explicitly allows the specific tools in
 that run's configuration. The MCP process inherits the server environment;
 set `GEN_AGENT_SERVER_PROVIDERS`, `GEN_AGENT_SERVER_CWD`, or
