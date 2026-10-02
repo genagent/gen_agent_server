@@ -1,0 +1,13 @@
+{
+  "usage": {
+    "cached_input_tokens": 546048,
+    "input_tokens": 599021,
+    "output_tokens": 5938
+  },
+  "session_id": "01a0fc6b-e3be-7d02-b0b2-359c454aa6f1",
+  "provider": "codex",
+  "elapsed_ms": 297303,
+  "stage": "implement",
+  "requested_model": null,
+  "model": "gpt-6-astra"
+}

@@ -1,0 +1,49 @@
+{
+  "instance": "handoff/6210",
+  "project": "/tmp/gen_agent_issue_214_20261002c",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 5586
+      },
+      "session_id": "a0fcc848-d666-4d60-a926-d11f91eab124",
+      "provider": "claude",
+      "elapsed_ms": 42324,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 150599,
+        "output_tokens": 846,
+        "cached_input_tokens": 118912
+      },
+      "session_id": "01a0fc6d-f75f-7842-9cf8-8cfd0e2a91c5",
+      "provider": "codex",
+      "elapsed_ms": 23834,
+      "stage": "review",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "58ff446583c74477f54c651cf9b92e6150bf3ad7",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/guides/workflows/supervisor.md",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/supervisor.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/strategies/supervisor_test.exs"
+  ],
+  "untracked_files": []
+}

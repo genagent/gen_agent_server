@@ -1,0 +1,241 @@
+extensions/ensemble/guides/workflows/supervisor.md | 14 +++-
+ .../gen_agent_ensemble/strategies/supervisor.ex    | 33 +++++++++
+ .../strategies/supervisor_test.exs                 | 86 +++++++++++++++++++++-
+ 3 files changed, 127 insertions(+), 6 deletions(-)
+
+diff --git a/extensions/ensemble/guides/workflows/supervisor.md b/extensions/ensemble/guides/workflows/supervisor.md
+index 02a635d..7490e4e 100644
+--- a/extensions/ensemble/guides/workflows/supervisor.md
++++ b/extensions/ensemble/guides/workflows/supervisor.md
+@@ -89,6 +89,7 @@ iex> E.start_link(
+ ...>        system: "Answer the question in 2-3 sentences.",
+ ...>        model: "claude-sonnet-4-6"},
+ ...>     decomposer: fn text -> String.split(text, "\n", trim: true) end,
++     max_subtasks: 5,
+ ...>     synthesizer: fn worker_outputs ->
+ ...>       worker_outputs
+ ...>       |> Enum.map(fn {_name, text} -> "- " <> text end)
+@@ -146,9 +147,11 @@ iex> E.await("research", tok) |> E.puts()
+   Common custom
+   synthesizers: markdown bullet list, JSON merge, "elect the
+   strongest answer" with a second LLM call.
+-- **Worker count is dynamic.** Decomposer output length determines
+-  how many workers run. If it returns an empty list, the ensemble
+-  replies with the coordinator's response without invoking a synthesizer.
++- **Worker count is dynamic but bounded.** Decomposer output length
++  determines how many workers run, up to `:max_subtasks` (a positive
++  integer, default 10; any other value raises `ArgumentError` at init).
++  If it returns an empty list, the ensemble replies with the
++  coordinator's response without invoking a synthesizer.
+ 
+ ## Gotchas
+ 
+@@ -156,6 +159,11 @@ iex> E.await("research", tok) |> E.puts()
+   decomposition is in progress, it's queued and runs after the
+   current fan-out completes. Not concurrent fan-outs -- use multiple
+   Supervisor ensembles if you need those.
++- **Over-limit decompositions fail the run.** If the decomposer returns
++  more than `:max_subtasks` sub-prompts, the caller receives
++  `{:error, {:too_many_subtasks, count, max}}`. No workers are started
++  and the list is not truncated. Queued requests continue normally.
++  Prompt the coordinator for fewer sub-prompts or raise the limit.
+ - **Workers are ephemeral.** Each fan-out spawns fresh workers and
+   stops them after synthesis. This means no per-worker conversation
+   history accumulation across runs -- the trade-off is the
+diff --git a/extensions/ensemble/lib/gen_agent_ensemble/strategies/supervisor.ex b/extensions/ensemble/lib/gen_agent_ensemble/strategies/supervisor.ex
+index dc29804..0128f98 100644
+--- a/extensions/ensemble/lib/gen_agent_ensemble/strategies/supervisor.ex
++++ b/extensions/ensemble/lib/gen_agent_ensemble/strategies/supervisor.ex
+@@ -25,6 +25,12 @@ defmodule GenAgentEnsemble.Strategies.Supervisor do
+       `[{worker_name, text}]`, or a two-argument function also accepting
+       the corresponding ordered sub-prompts. The default labels each
+       worker response with its assigned sub-prompt.
++    * `:max_subtasks` (optional) -- positive integer upper bound on the
++      number of sub-prompts a decomposition may return. Defaults to 10.
++      A decomposition with more sub-prompts fails the run with
++      `{:too_many_subtasks, count, max}`; no workers are started and the
++      sub-prompts are not truncated. Any other value raises
++      `ArgumentError` at init.
+ 
+   ## Limits
+ 
+@@ -43,6 +49,8 @@ defmodule GenAgentEnsemble.Strategies.Supervisor do
+   alias GenAgentEnsemble.Queue
+   alias GenAgentEnsemble.Usage
+ 
++  @default_max_subtasks 10
++
+   defstruct [
+     :coordinator,
+     :worker_prefix,
+@@ -50,6 +58,7 @@ defmodule GenAgentEnsemble.Strategies.Supervisor do
+     :worker_opts,
+     :decomposer,
+     :synthesizer,
++    max_subtasks: @default_max_subtasks,
+     subtasks: [],
+     phase: :idle,
+     queue: nil,
+@@ -62,6 +71,12 @@ defmodule GenAgentEnsemble.Strategies.Supervisor do
+     {w_prefix, w_mod, w_opts} = Keyword.fetch!(opts, :worker_template)
+     decomposer = Keyword.fetch!(opts, :decomposer)
+     synthesizer = Keyword.get(opts, :synthesizer, &default_synthesizer/2)
++    max_subtasks = Keyword.get(opts, :max_subtasks, @default_max_subtasks)
++
++    unless is_integer(max_subtasks) and max_subtasks > 0 do
++      raise ArgumentError,
++            "Supervisor :max_subtasks must be a positive integer, got: #{inspect(max_subtasks)}"
++    end
+ 
+     state = %__MODULE__{
+       coordinator: c_name,
+@@ -70,6 +85,7 @@ defmodule GenAgentEnsemble.Strategies.Supervisor do
+       worker_opts: w_opts,
+       decomposer: decomposer,
+       synthesizer: synthesizer,
++      max_subtasks: max_subtasks,
+       queue: Queue.new()
+     }
+ 
+@@ -109,6 +125,23 @@ defmodule GenAgentEnsemble.Strategies.Supervisor do
+     state = %{state | usage: Usage.add(state.usage, state.coordinator, response.usage)}
+     sub_prompts = state.decomposer.(response.text)
+ 
++    case length(sub_prompts) do
++      count when count > state.max_subtasks ->
++        reject_decomposition(token, count, state)
++
++      _ ->
++        fan_out(token, response, sub_prompts, state)
++    end
++  end
++
++  defp reject_decomposition(token, count, state) do
++    reason = {:too_many_subtasks, count, state.max_subtasks}
++    state = %{state | phase: :idle, subtasks: []}
++    {ops, state} = maybe_prepend_next(state, [{:reply_error, token, reason}])
++    {:ok, ops, state}
++  end
++
++  defp fan_out(token, response, sub_prompts, state) do
+     {op_lists, progress} =
+       sub_prompts
+       |> Enum.with_index(1)
+diff --git a/extensions/ensemble/test/gen_agent_ensemble/strategies/supervisor_test.exs b/extensions/ensemble/test/gen_agent_ensemble/strategies/supervisor_test.exs
+index 341db2f..362d1e9 100644
+--- a/extensions/ensemble/test/gen_agent_ensemble/strategies/supervisor_test.exs
++++ b/extensions/ensemble/test/gen_agent_ensemble/strategies/supervisor_test.exs
+@@ -64,7 +64,8 @@ defmodule GenAgentEnsemble.Strategies.SupervisorTest do
+     coord_script = [Event.new(:result, %{text: Enum.join(prompts, "\n")})]
+     worker_script = fn prompt -> [Event.new(:result, %{text: "answer: #{prompt}"})] end
+ 
+-    {:ok, _} = start_session(name, [coord_script], List.duplicate(worker_script, 12))
++    {:ok, _} =
++      start_session(name, [coord_script], List.duplicate(worker_script, 12), max_subtasks: 12)
+ 
+     {:ok, resp} = GenAgentEnsemble.ask(name, "q", timeout: 5_000)
+     assert resp.text == Enum.map_join(prompts, "\n\n", &"### #{&1}\n\nanswer: #{&1}")
+@@ -78,7 +79,8 @@ defmodule GenAgentEnsemble.Strategies.SupervisorTest do
+ 
+     {:ok, _} =
+       start_session(name, [coord_script], List.duplicate(worker_script, 12),
+-        synthesizer: synthesizer
++        synthesizer: synthesizer,
++        max_subtasks: 12
+       )
+ 
+     {:ok, resp} = GenAgentEnsemble.ask(name, "q", timeout: 5_000)
+@@ -98,7 +100,8 @@ defmodule GenAgentEnsemble.Strategies.SupervisorTest do
+ 
+     {:ok, _} =
+       start_session(name, [coord_script], List.duplicate(worker_script, 12),
+-        synthesizer: synthesizer
++        synthesizer: synthesizer,
++        max_subtasks: 12
+       )
+ 
+     {:ok, resp} = GenAgentEnsemble.ask(name, "q", timeout: 5_000)
+@@ -155,6 +158,83 @@ defmodule GenAgentEnsemble.Strategies.SupervisorTest do
+     assert resp.text == "coordinator answer"
+   end
+ 
++  test "decomposition at max_subtasks fans out", %{name: name} do
++    coord_script = [Event.new(:result, %{text: "a\nb"})]
++    worker_script = fn prompt -> [Event.new(:result, %{text: "w:#{prompt}"})] end
++
++    {:ok, _} =
++      start_session(name, [coord_script], [worker_script, worker_script], max_subtasks: 2)
++
++    {:ok, resp} = GenAgentEnsemble.ask(name, "q", timeout: 5_000)
++    assert resp.text == "### a\n\nw:a\n\n### b\n\nw:b"
++  end
++
++  test "decomposition over max_subtasks errors and starts no workers", %{name: name} do
++    coord_script = [Event.new(:result, %{text: "a\nb\nc"})]
++
++    {:ok, _} = start_session(name, [coord_script], [], max_subtasks: 2)
++
++    assert {:error, {:too_many_subtasks, 3, 2}} = GenAgentEnsemble.ask(name, "q", timeout: 5_000)
++
++    {:ok, info} = GenAgentEnsemble.status(name)
++    assert info.agents == ["#{name}-coord"]
++    assert info.phase == :idle
++  end
++
++  test "default max_subtasks rejects an oversized decomposition", %{name: name} do
++    text = Enum.map_join(1..11, "\n", &"t#{&1}")
++
++    {:ok, _} = start_session(name, [[Event.new(:result, %{text: text})]], [])
++
++    assert {:error, {:too_many_subtasks, 11, 10}} =
++             GenAgentEnsemble.ask(name, "q", timeout: 5_000)
++  end
++
++  test "empty decomposition is within the limit", %{name: name} do
++    coord_script = [Event.new(:result, %{text: "coordinator answer"})]
++
++    {:ok, _} =
++      start_session(name, [coord_script], [], decomposer: fn _ -> [] end, max_subtasks: 1)
++
++    {:ok, resp} = GenAgentEnsemble.ask(name, "q", timeout: 5_000)
++    assert resp.text == "coordinator answer"
++  end
++
++  test "init rejects invalid max_subtasks", %{name: name} do
++    Process.flag(:trap_exit, true)
++
++    for bad <- [0, -1, 1.5, "3", nil] do
++      assert {:error, {:init_failed, :error, ArgumentError}} =
++               start_session(name, [], [], max_subtasks: bad)
++    end
++  end
++
++  test "queued run continues after an over-limit run" do
++    {:ok, state, _} =
++      SupStrat.init(
++        coordinator: {"coord", TestAgent, []},
++        worker_template: {"w", TestAgent, []},
++        decomposer: decomposer_newlines(),
++        max_subtasks: 2
++      )
++
++    {:ok, [{:dispatch, "coord", "first", :t1}], state} =
++      SupStrat.handle_tell("first", [], :t1, state)
++
++    {:ok, [], state} = SupStrat.handle_tell("second", [], :t2, state)
++
++    response = %GenAgent.Response{text: "x\ny\nz"}
++
++    assert {:ok, ops, state} = SupStrat.handle_response("coord", response, state)
++
++    assert ops == [
++             {:reply_error, :t1, {:too_many_subtasks, 3, 2}},
++             {:dispatch, "coord", "second", :t2}
++           ]
++
++    assert state.phase == {:decomposing, :t2}
++  end
++
+   test "second tell queues behind an in-flight fan-out", %{name: name} do
+     # First coord response triggers 2 workers; second coord response also 2 workers.
+     coord_scripts = [

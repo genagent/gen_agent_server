@@ -155,3 +155,13 @@ removed Markdown substring assertions in favor of executable config and
 status checks. A control API should preserve each review finding, its
 verification result, and stage attempt metadata separately; an approval or
 request-changes line alone cannot represent this history.
+
+The [#214/#220 strategy runs](runs/2026-10-02-supervisor-pipeline/README.md)
+separated a bounded-resource fix from an additive result-contract change.
+The first reviewer caught that a safe default could break existing 12-worker
+coverage and that a queue test did not guarantee a queued request. The second
+lane passed monorepo tests but crosses a Hex publication boundary: core must
+publish `Response.metadata` before Ensemble may require and use it. An
+optional control API should track dependent release gates as well as tests,
+reviews and PR state; it must not equate a locally green branch with a
+publishable package.

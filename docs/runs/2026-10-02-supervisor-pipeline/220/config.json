@@ -1,0 +1,21 @@
+{
+  "project": "/tmp/gen_agent_issue_220_20261002c",
+  "issue": "/tmp/gen_agent_issue_220_20261002c_issue.md",
+  "instructions": "/tmp/gen_agent_issue_220_20261002c_notes.md",
+  "out": "/tmp/gen_agent_issue_220_20261002c_run",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {
+      "provider": "codex",
+      "model": null
+    },
+    "implement": {
+      "provider": "codex",
+      "model": null
+    },
+    "review": {
+      "provider": "claude",
+      "model": "sonnet"
+    }
+  }
+}
