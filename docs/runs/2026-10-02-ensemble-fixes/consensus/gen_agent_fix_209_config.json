@@ -1,0 +1,13 @@
+{
+  "project": "/tmp/gen_agent_fix_209_20261002",
+  "issue": "/tmp/gen_agent_fix_209_issue.md",
+  "instructions": "/tmp/gen_agent_fix_209_notes.md",
+  "out": "/tmp/gen_agent_fix_209_run",
+  "timeout_ms": 1200000,
+  "revise": true,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-astra"},
+    "implement": {"provider": "claude", "model": "sonnet"},
+    "review": {"provider": "codex", "model": "gpt-6-astra"}
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "instance": "handoff/6212",
+  "project": "/tmp/gen_agent_fix_209_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 28,
+        "output_tokens": 11017
+      },
+      "session_id": "c12a7f30-8c49-4834-8689-c7c94f3ec997",
+      "provider": "claude",
+      "elapsed_ms": 96548,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 202717,
+        "output_tokens": 1071,
+        "cached_input_tokens": 168448
+      },
+      "session_id": "01a0fcb4-9e15-75e1-8f00-bba31c61ac05",
+      "provider": "codex",
+      "elapsed_ms": 60127,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "7f848d4e89e41409d90b66e8e039af8eac9caa5d",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/guides/workflows/consensus.md",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/strategies/consensus_test.exs"
+  ],
+  "untracked_files": []
+}

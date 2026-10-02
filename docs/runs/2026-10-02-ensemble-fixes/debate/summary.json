@@ -1,0 +1,52 @@
+{
+  "instance": "handoff/3780",
+  "project": "/tmp/gen_agent_fix_212_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 177,
+        "output_tokens": 11175
+      },
+      "session_id": "ea23306b-20f9-43a6-9f99-1b63e083ae0d",
+      "provider": "claude",
+      "elapsed_ms": 111430,
+      "stage": "implement",
+      "requested_model": "haiku",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 29184,
+        "input_tokens": 46447,
+        "output_tokens": 683
+      },
+      "session_id": "01a0fcb0-7b62-71a2-9514-54b3f79b2d0b",
+      "provider": "codex",
+      "elapsed_ms": 15392,
+      "stage": "review",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 47360,
+        "input_tokens": 64298,
+        "output_tokens": 1123
+      },
+      "session_id": "01a0fcae-6323-7a90-93dc-5fe834f80520",
+      "provider": "codex",
+      "elapsed_ms": 25943,
+      "stage": "triage",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    }
+  },
+  "base_commit": "7f848d4e89e41409d90b66e8e039af8eac9caa5d",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "extensions/ensemble/guides/workflows/debate.md",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/debate.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/strategies/debate_test.exs"
+  ],
+  "untracked_files": []
+}

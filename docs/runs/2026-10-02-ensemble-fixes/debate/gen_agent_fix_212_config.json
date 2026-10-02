@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_fix_212_20261002",
+  "issue": "/tmp/gen_agent_fix_212_issue.md",
+  "instructions": "/tmp/gen_agent_fix_212_notes.md",
+  "out": "/tmp/gen_agent_fix_212_run",
+  "timeout_ms": 1200000,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-luna"},
+    "implement": {"provider": "claude", "model": "haiku"},
+    "review": {"provider": "codex", "model": "gpt-6-luna"}
+  }
+}
