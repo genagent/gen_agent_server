@@ -1,0 +1,3 @@
+# Core issue #242: deliver a retried turn's final result to the original caller
+
+`finish_error/3` records the original failure before applying `handle_error/3`. When that callback returns `{:prompt, retry, state}`, the retry becomes a separate `:self_chain` turn and its result is not delivered to the original `ask/3`, `poll/3`, or `tell_with_completion/4` caller. Correct this so a caller sees the final result after retries; preserve independent self-chain behavior and existing scheduling guarantees. Add deterministic tests for ask, tell/poll, completion, repeated retry, and relevant cancellation/halt paths. Keep telemetry and documentation coherent.
