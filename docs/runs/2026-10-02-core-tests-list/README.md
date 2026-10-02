@@ -23,7 +23,7 @@ deleted the placeholder test. The independent reviewer approved, but could
 not run tests before dependencies were fetched. The caller fetched locked
 dependencies, then ran 91 focused and 324 full root tests, formatting,
 warnings-as-errors compilation, strict Credo, and docs with warnings-as-errors.
-[Core PR #355](https://github.com/genagent/gen_agent/pull/355) contains the change.
+[Core PR #355](https://github.com/genagent/gen_agent/pull/355) passed CI and merged as `80c44d7`. Issue #110 closed, and its in-progress label was removed.
 
 ## Core #256: list running agents
 
@@ -35,7 +35,7 @@ unregistered, non-string, and stopped names. The reviewer approved from
 source inspection without running tests. The caller fetched locked
 dependencies and ran 324 full root tests, formatting, warnings-as-errors
 compilation, strict Credo, docs with warnings-as-errors, and Dialyzer.
-[Core PR #354](https://github.com/genagent/gen_agent/pull/354) contains the change.
+[Core PR #354](https://github.com/genagent/gen_agent/pull/354) passed CI and merged as `ff8c3c2`. Issue #256 closed, and its in-progress label was removed.
 
 The useful control pattern here is a two-lane issue pool with a different
 implementation provider on each lane, one shared handoff script, independent
