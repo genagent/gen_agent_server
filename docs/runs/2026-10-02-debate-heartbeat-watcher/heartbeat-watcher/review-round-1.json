@@ -1,0 +1,12 @@
+{
+  "usage": {
+    "input_tokens": 18,
+    "output_tokens": 6677
+  },
+  "session_id": "474c4fdc-3cc5-4262-97f2-a73561316ea5",
+  "provider": "claude",
+  "elapsed_ms": 73368,
+  "stage": "review",
+  "requested_model": "opus",
+  "model": "claude-opus-5-5"
+}

@@ -1,0 +1,22 @@
+{
+  "project": "/tmp/gen_agent_issue_244_heartbeat_watcher",
+  "issue": "/tmp/gen_agent_issue_244.md",
+  "out": "/tmp/gen_agent_issue_244_handoff",
+  "timeout_ms": 1800000,
+  "stages": {
+    "triage": {
+      "provider": "claude",
+      "model": "sonnet"
+    },
+    "implement": {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    "review": {
+      "provider": "claude",
+      "model": "opus"
+    }
+  },
+  "instructions": "/tmp/gen_agent_issue_244_notes.md",
+  "review_only": true
+}
