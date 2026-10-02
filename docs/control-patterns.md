@@ -135,3 +135,13 @@ result collection for a long-lived instance, and preserving stage artifacts for
 review. Extract one only after at least two real callers need the same result
 shape and failure policy. Provider roles, prompts, and verdict rules stay in
 caller configuration; admission, ownership, timeout, and cleanup stay in code.
+
+The [#110/#256 runs](runs/2026-10-02-core-tests-list/README.md) exercised a
+two-lane issue pool on independent core files. One lane used Claude Sonnet
+for implementation and Codex Astra for review; the other used Codex Astra
+for implementation and Claude Sonnet for review. A read-only triage stage
+removed a stale Checkpointer test finding before edits. The caller fetched
+missing dependencies after the model review and ran root package gates and
+Dialyzer independently. This supports a reusable claim/checkout/handoff/
+validate/PR pattern, while package-specific acceptance commands and the
+choice to skip already-resolved findings remain caller decisions.

@@ -1,0 +1,53 @@
+{
+  "instance": "handoff/3202",
+  "project": "/tmp/gen_agent_issue_110_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 26,
+        "output_tokens": 7400
+      },
+      "session_id": "510c1b27-7ecb-4ed6-b8b9-1534211a355c",
+      "provider": "claude",
+      "elapsed_ms": 47089,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 160384,
+        "input_tokens": 191738,
+        "output_tokens": 1088
+      },
+      "session_id": "01a0fc36-d9ef-7fb3-a255-893ede4b1a26",
+      "provider": "codex",
+      "elapsed_ms": 73736,
+      "stage": "review",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 113408,
+        "input_tokens": 142104,
+        "output_tokens": 2034
+      },
+      "session_id": "01a0fc34-aec6-7f02-9e70-6abbe9d136eb",
+      "provider": "codex",
+      "elapsed_ms": 95615,
+      "stage": "triage",
+      "requested_model": null,
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "abb0338e396fbbe98454b108a904edf6d08a5575",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "test/gen_agent/event_test.exs",
+    "test/gen_agent/integration_test.exs",
+    "test/gen_agent/lifecycle_hooks_test.exs",
+    "test/gen_agent/server_test.exs"
+  ],
+  "untracked_files": []
+}

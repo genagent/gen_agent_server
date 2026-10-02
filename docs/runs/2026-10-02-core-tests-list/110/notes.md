@@ -1,0 +1,1 @@
+Scope: tests only. Recheck each of the eight cases on current main; some may have changed. Make assertions genuinely sensitive to the named behavior. Avoid sleeps if synchronization can be explicit. Keep tests deterministic and focused. Do not change production code. Do not touch Ensemble files or pattern guides.
