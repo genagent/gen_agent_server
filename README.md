@@ -241,6 +241,9 @@ A network API, MCP adapter, and dashboard are follow-on layers.
 
 The [dogfooding log](docs/dogfooding.md) records bounded real tasks, observed
 issues, and the planned progression through Ensemble patterns.
+The [control-pattern inventory](docs/control-patterns.md) points to executable
+examples and records the repeated control steps that may become an optional
+higher-level module.
 
 For a local, model-free look at server-managed Pipeline and Supervisor
 patterns, run `mix run examples/ensemble_patterns.exs`. The example checks
