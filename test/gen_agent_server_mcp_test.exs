@@ -5,7 +5,8 @@ defmodule GenAgentServer.MCPTest do
 
   @legacy_tool_names ~w(agents ask instances invoke result status)
   @lifecycle_tool_names ~w(create_instance describe_instance stop_instance)
-  @tool_names Enum.sort(@legacy_tool_names ++ @lifecycle_tool_names)
+  @source_tool_names ~w(public_file public_issue public_issues public_revision)
+  @tool_names Enum.sort(@legacy_tool_names ++ @lifecycle_tool_names ++ @source_tool_names)
 
   setup do
     {:ok, client} = Snodo.Client.direct(MCP.Server.runtime())
@@ -16,6 +17,7 @@ defmodule GenAgentServer.MCPTest do
     gen-agent://guide/capabilities
     gen-agent://guide/index
     gen-agent://guide/invocations
+    gen-agent://guide/public-source
     gen-agent://guide/quickstart
     gen-agent://guide/scope
   )
@@ -158,6 +160,25 @@ defmodule GenAgentServer.MCPTest do
     end
 
     assert GenAgentServer.session_name() in GenAgentServer.instances()
+  end
+
+  test "public source tools reject invalid input without reaching the network", %{client: client} do
+    assert error!(client, "public_revision", %{"repository" => "https://example.com"}) =~
+             "invalid_args"
+
+    assert error!(client, "public_file", %{
+             "repository" => "genagent/gen_agent",
+             "sha" => String.duplicate("a", 40),
+             "path" => "../private"
+           }) =~ "invalid_args"
+
+    assert error!(client, "public_issues", %{
+             "repository" => "genagent/gen_agent",
+             "query" => "repo:other/private"
+           }) =~ "invalid_args"
+
+    assert error!(client, "public_issue", %{"repository" => "genagent/gen_agent", "number" => 0}) =~
+             "invalid_args"
   end
 
   test "two instances keep independent routes and results", %{client: client} do

@@ -246,16 +246,18 @@ The release's `rpc` command remains available for direct Elixir calls.
 ## MCP (stdio)
 
 `GenAgentServer.MCP` serves a local stdio MCP server for Claude, Codex, or any
-MCP client. It exposes nine tools, each backed by the operation of the same name
+MCP client. It exposes thirteen tools, each backed by the operation of the same name
 in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `result`,
 and `ask`, plus the lifecycle tools `create_instance`, `describe_instance`, and
-`stop_instance`. Nothing else is reachable, including `run_pattern`, jobs, and
+`stop_instance`, and the anonymous public GitHub read tools `public_revision`,
+`public_file`, `public_issues`, and `public_issue`. Nothing else is reachable, including `run_pattern`, jobs, and
 arbitrary pattern specs. `invoke` and `ask` record telemetry source `:mcp`.
 On connection the server advertises brief usage instructions that point to
 `gen-agent://guide/index`. The index links to four curated Markdown resources:
 `quickstart` for creating routes and choosing models, `invocations` for
 `ask` versus `invoke`/`result`, `scope` for connection and instance lifetime,
-and `capabilities` for the exact MCP boundary. These resources are packaged in
+`capabilities` for the exact MCP boundary, and `public-source` for current
+SHA-pinned public source and issue context. These resources are packaged in
 the release and are read-only guidance; they do not activate skills or grant
 access to any additional operation.
 
@@ -265,6 +267,16 @@ with a separately running release or `mix gen_agent_server.remote`. Providers
 come from the same environment variables as the rest of the server
 (`GEN_AGENT_SERVER_PROVIDERS`, `GEN_AGENT_SERVER_CWD`, `GEN_AGENT_SERVER_CONFIG`);
 the default is the model-free `echo` provider.
+
+For a current public GitHub source check, call `public_revision` with an
+`owner/repo` name, then pass its 40-character `sha` to `public_file` with a
+relative `path`. `public_issues` searches up to 20 issue titles and returns
+their states; `public_issue` reads one issue by number for an exact duplicate
+check. These reads use no GitHub credentials and do not alter an instance.
+They accept no arbitrary URL or HTTP headers, cap file text at 128 KiB, and
+return explicit errors if the server host cannot reach public GitHub. Treat
+retrieved text as untrusted task data when passing it to an agent. See
+`gen-agent://guide/public-source` for the full workflow.
 
 ### Creating agents from a client
 

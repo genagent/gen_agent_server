@@ -196,4 +196,73 @@ defmodule GenAgentServer.MCP.Tools do
     @impl true
     def call(arguments, _context), do: GenAgentServer.MCP.run("stop_instance", arguments)
   end
+
+  defmodule PublicRevision do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "public_revision",
+      description:
+        "Resolve a public GitHub repository's default branch to its current commit SHA."
+
+    input_schema(
+      "public_revision"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("public_revision", arguments)
+  end
+
+  defmodule PublicFile do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "public_file",
+      description: "Read a bounded UTF-8 source file from an exact public GitHub commit."
+
+    input_schema(
+      "public_file"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("public_file", arguments)
+  end
+
+  defmodule PublicIssues do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "public_issues",
+      description: "Search up to 20 public GitHub issue titles and return their current states."
+
+    input_schema(
+      "public_issues"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("public_issues", arguments)
+  end
+
+  defmodule PublicIssue do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "public_issue",
+      description: "Read a specific public GitHub issue for an exact duplicate check."
+
+    input_schema(
+      "public_issue"
+      |> GenAgentServer.Ops.fetch()
+      |> elem(1)
+      |> GenAgentServer.Ops.json_schema()
+    )
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("public_issue", arguments)
+  end
 end
