@@ -5,7 +5,9 @@
 # every stage's output. Each stage is a separate invocation on one managed
 # Switchboard instance, so the caller sees the triage plan and the
 # implementer's report as well as the final review (a Pipeline returns only
-# its last stage). The diff is captured with git outside any model response.
+# its last stage). Each completed stage's text and metadata are saved before
+# the next stage starts, and a failed stage writes its error metadata. The
+# diff is captured with git outside any model response before review starts.
 #
 # CONFIG.json:
 #
@@ -78,7 +80,7 @@ defmodule IssueHandoff do
         if review_only? or revise?,
           do: reused(out, "triage"),
           else:
-            run_stage(name, "triage", stages, timeout, """
+            run_stage(name, "triage", stages, timeout, out, """
             #{issue}
 
             #{notes}
@@ -95,7 +97,7 @@ defmodule IssueHandoff do
             reused(out, "implement")
 
           revise? ->
-            run_stage(name, "implement", stages, timeout, """
+            run_stage(name, "implement", stages, timeout, out, """
             #{issue}
 
             #{notes}
@@ -111,7 +113,7 @@ defmodule IssueHandoff do
             """)
 
           true ->
-            run_stage(name, "implement", stages, timeout, """
+            run_stage(name, "implement", stages, timeout, out, """
             #{issue}
 
             #{notes}
@@ -130,9 +132,10 @@ defmodule IssueHandoff do
       git(project, ["add", "--intent-to-add", "--all"])
       diff = git(project, ["diff", "--stat"]) <> "\n\n" <> git(project, ["diff"])
       untracked = git(project, ["ls-files", "--others", "--exclude-standard"])
+      write(out, "diff.patch", diff)
 
       review =
-        run_stage(name, "review", stages, timeout, """
+        run_stage(name, "review", stages, timeout, out, """
         #{issue}
 
         #{notes}
@@ -152,11 +155,6 @@ defmodule IssueHandoff do
         Untracked files:
         #{if untracked == "", do: "(none)", else: untracked}
         """)
-
-      write(out, "triage.md", triage.text)
-      write(out, "implement.md", implement.text)
-      write(out, "diff.patch", diff)
-      write(out, "review.md", review.text)
 
       summary = %{
         project: project,
@@ -218,13 +216,13 @@ defmodule IssueHandoff do
     {stage, Agents.Role, backend_opts}
   end
 
-  defp run_stage(name, stage, stages, timeout, prompt) do
+  defp run_stage(name, stage, stages, timeout, out, prompt) do
     started = System.monotonic_time(:millisecond)
     provider = stages[stage]["provider"]
 
     case GenAgentServer.ask_instance(name, stage, prompt, timeout: timeout) do
       {:ok, response} ->
-        %{
+        result = %{
           stage: stage,
           provider: provider,
           requested_model: stages[stage]["model"],
@@ -235,7 +233,27 @@ defmodule IssueHandoff do
           text: response.text
         }
 
+        write(out, "#{stage}.md", result.text)
+        write(out, "#{stage}.json", Jason.encode!(Map.delete(result, :text), pretty: true))
+        result
+
       {:error, reason} ->
+        write(
+          out,
+          "#{stage}-failure.json",
+          Jason.encode!(
+            %{
+              stage: stage,
+              provider: provider,
+              requested_model: stages[stage]["model"],
+              instance: name,
+              elapsed_ms: System.monotonic_time(:millisecond) - started,
+              reason: inspect(reason)
+            },
+            pretty: true
+          )
+        )
+
         raise "#{stage} stage failed: #{inspect(reason)}"
     end
   end
