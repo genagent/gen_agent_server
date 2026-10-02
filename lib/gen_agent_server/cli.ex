@@ -50,7 +50,7 @@ defmodule GenAgentServer.CLI do
   defp run_instance(instance, ["ask", agent | words], source) when words != [] do
     with {:ok, response} <-
            GenAgentServer.ask_instance(instance, agent, Enum.join(words, " "), source: source) do
-      {:ok, response.text}
+      {:ok, presented_answer(response)}
     end
   end
 
@@ -61,7 +61,7 @@ defmodule GenAgentServer.CLI do
   defp run_instance(instance, ["result", id], _source) do
     case GenAgentServer.result(instance, id) do
       {:ok, :pending} -> {:ok, "pending"}
-      {:ok, :completed, response} -> {:ok, response.text}
+      {:ok, :completed, response} -> {:ok, presented_answer(response)}
       {:ok, :failed, reason} -> {:error, reason}
       error -> error
     end
@@ -138,6 +138,11 @@ defmodule GenAgentServer.CLI do
   end
 
   def error_message(_args, reason), do: "GenAgent request failed: #{inspect(reason)}"
+
+  # A response may contain more than one completed assistant message. Keep
+  # Response.text intact for API consumers; use the explicit presentation
+  # field when the installed core version provides it.
+  defp presented_answer(response), do: Map.get(response, :final_message) || response.text
 
   defp command(["--instance", instance | args]), do: {args, instance}
   defp command(args), do: {args, GenAgentServer.session_name()}
