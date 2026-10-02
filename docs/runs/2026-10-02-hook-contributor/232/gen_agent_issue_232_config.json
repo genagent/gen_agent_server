@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/gen_agent_issue_232_contributing",
+  "issue": "/tmp/gen_agent_issue_232.md",
+  "out": "/tmp/gen_agent_issue_232_handoff",
+  "timeout_ms": 1800000,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-luna"},
+    "implement": {"provider": "claude", "model": "haiku"},
+    "review": {"provider": "codex", "model": "gpt-6-luna"}
+  },
+  "instructions": "/tmp/gen_agent_issue_232_notes.md"
+}

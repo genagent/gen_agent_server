@@ -1,0 +1,46 @@
+{
+  "instance": "handoff/6210",
+  "project": "/tmp/gen_agent_issue_232_contributing",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 42240,
+        "input_tokens": 52224,
+        "output_tokens": 468
+      },
+      "session_id": "01a0fc1f-91b4-7b03-9c7d-51a838c0e9d8",
+      "provider": "codex",
+      "elapsed_ms": 15447,
+      "stage": "review",
+      "requested_model": "gpt-6-luna",
+      "model": "gpt-6-luna"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "e44ab6beb0262ee3c4accf77ff12e5db80312366",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "CONTRIBUTING.md",
+    "README.md"
+  ],
+  "untracked_files": []
+}

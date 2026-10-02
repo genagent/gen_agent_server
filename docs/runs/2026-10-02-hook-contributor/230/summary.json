@@ -1,0 +1,46 @@
+{
+  "instance": "handoff/6210",
+  "project": "/tmp/gen_agent_issue_230_hooks",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 140032,
+        "input_tokens": 173045,
+        "output_tokens": 887
+      },
+      "session_id": "01a0fc22-f2e7-7331-be59-34856a851c85",
+      "provider": "codex",
+      "elapsed_ms": 49682,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "e44ab6beb0262ee3c4accf77ff12e5db80312366",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "lib/gen_agent.ex",
+    "test/gen_agent/hook_blocking_test.exs"
+  ],
+  "untracked_files": []
+}

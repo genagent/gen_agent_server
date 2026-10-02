@@ -119,6 +119,16 @@ archiving a review before `revise` duplicated the runner's archive; a control
 API needs append-only attempts with stable round IDs. Stage verdicts and
 host checks should remain separate completion conditions.
 
+The [#230/#232 runs](runs/2026-10-02-hook-contributor/README.md) reused two
+independent handoffs with different model costs: Codex Luna and Claude Haiku
+were sufficient for a contributor guide, while hook execution context used
+Claude Sonnet and Codex Astra. Source reviews caught omitted agent-process
+checkpoint work and inaccurate Release Please wording. Host checks caught a
+README link that ExDoc could not package and ran behavioral hook tests
+outside the model session. A future control module should retain each review
+and model choice with its exact stage attempt, not overwrite prior metadata;
+task-specific claims still need host and reviewer checks.
+
 The first candidates for an optional control module are repeated operations
 that are currently duplicated outside `Run`: named-task attribution, terminal
 result collection for a long-lived instance, and preserving stage artifacts for
