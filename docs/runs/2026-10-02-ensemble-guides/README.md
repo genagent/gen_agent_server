@@ -24,8 +24,7 @@ fragments and kept three executable checks: Debate config module resolution,
 Consensus config and parser execution, and Supervisor status shapes. A final
 `review_only` pass approved that scope. The host ran 3 focused and 172 full
 Ensemble tests, format, warnings-as-errors compile, strict Credo, docs
-warnings-as-errors, and Dialyzer. [Core PR #357](https://github.com/genagent/gen_agent/pull/357)
-contains the change.
+warnings-as-errors, and Dialyzer. [Core PR #357](https://github.com/genagent/gen_agent/pull/357) passed CI and merged as `58ff446`. Issue #228 closed and its in-progress label was removed.
 
 ## #205 Strategy contracts
 
@@ -41,8 +40,7 @@ active-token clarifications, and requested a third read-only review. It
 approved, explicitly accepting the host test as the authority on the false
 trap-exit concern. The host ran 171 full Ensemble tests, format,
 warnings-as-errors compile, strict Credo, docs warnings-as-errors, and
-Dialyzer. [Core PR #356](https://github.com/genagent/gen_agent/pull/356)
-contains the change.
+Dialyzer. [Core PR #356](https://github.com/genagent/gen_agent/pull/356) passed CI and merged as `a2a3600`. Issue #205 closed and its in-progress label was removed.
 
 Both lanes illustrate why reviewer findings, source checks, and executable
 results need separate fields in a control API. A reviewer caught real
