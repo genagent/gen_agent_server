@@ -7,19 +7,45 @@ release = Path.expand("_build/prod/rel/gen_agent_server/bin/gen_agent_server")
 try do
   {:ok, discovery} = Snodo.Client.discover(client)
 
-  unless discovery["instructions"] =~ "gen-agent://guide/quickstart",
+  unless discovery["instructions"] =~ "gen-agent://guide/index",
     do: raise("MCP instructions are missing")
 
   {:ok, resources} = Snodo.Client.list_resources(client)
 
-  unless Enum.map(resources, & &1["uri"]) == ["gen-agent://guide/quickstart"],
-    do: raise("MCP quickstart resource is missing")
+  guide_uris =
+    ~w(gen-agent://guide/capabilities gen-agent://guide/index gen-agent://guide/invocations gen-agent://guide/quickstart gen-agent://guide/scope)
+
+  unless resources |> Enum.map(& &1["uri"]) |> Enum.sort() == guide_uris,
+    do: raise("MCP guide catalogue is incomplete")
+
+  {:ok, %{"contents" => [%{"text" => index}]}} =
+    Snodo.Client.read_resource(client, "gen-agent://guide/index")
+
+  unless Enum.all?(guide_uris -- ["gen-agent://guide/index"], &String.contains?(index, &1)),
+    do: raise("MCP guide index has broken links")
 
   {:ok, %{"contents" => [%{"text" => guide}]}} =
     Snodo.Client.read_resource(client, "gen-agent://guide/quickstart")
 
   unless guide =~ "create_instance" and guide =~ "to a read-only sandbox",
     do: raise("MCP quickstart is incomplete")
+
+  {:ok, legacy} =
+    Snodo.Client.connect({:stdio, release, ["eval", "GenAgentServer.MCP.serve()"]},
+      protocol: "2025-11-25"
+    )
+
+  try do
+    unless legacy.session.instructions =~ "gen-agent://guide/index",
+      do: raise("MCP legacy initialize instructions are missing")
+
+    {:ok, legacy_resources} = Snodo.Client.list_resources(legacy)
+
+    unless legacy_resources |> Enum.map(& &1["uri"]) |> Enum.sort() == guide_uris,
+      do: raise("MCP legacy resource catalogue is incomplete")
+  after
+    Snodo.Client.close(legacy)
+  end
 
   {:ok, tools} = Snodo.Client.list_tools(client)
   names = Enum.map(tools, & &1["name"]) |> Enum.sort()
