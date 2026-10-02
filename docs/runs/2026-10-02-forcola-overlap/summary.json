@@ -1,0 +1,48 @@
+{
+  "instance": "handoff/6212",
+  "project": "/tmp/codex_wrapper_forcola_196",
+  "stages": {
+    "implement": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "implement",
+      "requested_model": null,
+      "model": null
+    },
+    "review": {
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 1947
+      },
+      "session_id": "61544266-5861-48d0-968a-189baa315f49",
+      "provider": "claude",
+      "elapsed_ms": 19289,
+      "stage": "review",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "triage": {
+      "usage": null,
+      "session_id": null,
+      "provider": null,
+      "elapsed_ms": 0,
+      "reused": true,
+      "stage": "triage",
+      "requested_model": null,
+      "model": null
+    }
+  },
+  "base_commit": "d521ee13b2abb68d039df06de3932e2dd64d2322",
+  "verdict": "APPROVE",
+  "changed_files": [
+    "README.md",
+    "lib/codex_wrapper/runner.ex",
+    "lib/codex_wrapper/runner/forcola.ex",
+    "mix.exs",
+    "mix.lock"
+  ],
+  "untracked_files": []
+}

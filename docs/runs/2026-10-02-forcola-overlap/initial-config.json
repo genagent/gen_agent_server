@@ -1,0 +1,12 @@
+{
+  "project": "/tmp/codex_wrapper_forcola_196",
+  "issue": "/tmp/codex_wrapper_forcola_196_issue.md",
+  "instructions": "/tmp/codex_wrapper_forcola_196_notes.md",
+  "out": "/tmp/codex_wrapper_forcola_196_run",
+  "timeout_ms": 900000,
+  "stages": {
+    "triage": {"provider": "codex", "model": "gpt-6-luna"},
+    "implement": {"provider": "codex", "model": "gpt-6-luna"},
+    "review": {"provider": "claude", "model": "sonnet"}
+  }
+}
