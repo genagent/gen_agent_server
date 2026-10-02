@@ -5,6 +5,8 @@ defmodule Mix.Tasks.GenAgentServer do
 
   @impl true
   def run(args) do
+    :ok = :io.setopts(:standard_io, encoding: :unicode)
+
     command_args =
       case args do
         ["--instance", _name | rest] -> rest
@@ -23,13 +25,8 @@ defmodule Mix.Tasks.GenAgentServer do
       {:ok, output} ->
         IO.puts(output)
 
-      {:error, :usage} ->
-        Mix.raise(
-          "usage: mix gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT"
-        )
-
       {:error, reason} ->
-        Mix.raise("GenAgent request failed: #{inspect(reason)}")
+        Mix.raise("error: #{GenAgentServer.CLI.error_message(args, reason)}")
     end
   end
 end

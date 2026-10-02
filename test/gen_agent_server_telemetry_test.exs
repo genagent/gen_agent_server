@@ -80,7 +80,13 @@ defmodule GenAgentServerTelemetryTest do
 
   test "remote CLI expression labels its invocation source" do
     expression = GenAgentServer.Remote.expression(["invoke", "echo", "remote"])
-    id = ExUnit.CaptureIO.capture_io(fn -> Code.eval_string(expression) end) |> String.trim()
+
+    {:ok, id} =
+      expression
+      |> then(fn expression ->
+        ExUnit.CaptureIO.capture_io(fn -> Code.eval_string(expression) end)
+      end)
+      |> GenAgentServer.Remote.decode_response()
 
     assert_receive {:telemetry, [:gen_agent_server, :invocation, :start], _,
                     %{invocation_id: ^id, source: :remote_cli}}

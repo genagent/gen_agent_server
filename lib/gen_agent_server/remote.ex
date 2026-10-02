@@ -7,7 +7,16 @@ defmodule GenAgentServer.Remote do
   @doc false
   def expression(args) when is_list(args) do
     encoded_args = inspect(args, limit: :infinity, printable_limit: :infinity)
-    "GenAgentServer.CLI.main(#{encoded_args}, :remote_cli)"
+    "GenAgentServer.CLI.remote_main(#{encoded_args})"
+  end
+
+  @doc false
+  def decode_response(output) when is_binary(output) do
+    case Jason.decode(String.trim(output)) do
+      {:ok, %{"ok" => text}} when is_binary(text) -> {:ok, text}
+      {:ok, %{"error" => message}} when is_binary(message) -> {:error, message}
+      _ -> {:error, :invalid_response}
+    end
   end
 
   @doc false

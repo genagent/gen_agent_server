@@ -5,6 +5,8 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
 
   @impl true
   def run(args) do
+    :ok = :io.setopts(:standard_io, encoding: :unicode)
+
     if args == [] do
       Mix.raise(
         "usage: mix gen_agent_server.remote instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
@@ -28,7 +30,11 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
 
     case result do
       {output, 0} ->
-        IO.write(output)
+        case GenAgentServer.Remote.decode_response(output) do
+          {:ok, text} -> IO.puts(text)
+          {:error, :invalid_response} -> Mix.raise("server RPC returned an invalid response")
+          {:error, message} -> Mix.raise("error: #{message}")
+        end
 
       {:error, :timeout} ->
         Mix.raise(timeout_message(args))

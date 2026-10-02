@@ -70,17 +70,75 @@ defmodule GenAgentServer.CLI do
   defp run_instance(_instance, _args, _source), do: {:error, :usage}
 
   def main(args, source \\ :local_cli) do
+    :ok = :io.setopts(:standard_io, encoding: :unicode)
+    :ok = :io.setopts(:standard_error, encoding: :unicode)
+
     case run(args, source) do
       {:ok, output} ->
         IO.puts(output)
         :ok
 
-      {:error, :usage} ->
-        raise ArgumentError,
-              "usage: gen_agent_server instances | jobs | job NAME | run-job NAME | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
-
       {:error, reason} ->
-        raise RuntimeError, "GenAgent request failed: #{inspect(reason)}"
+        Mix.raise("error: #{error_message(args, reason)}")
     end
   end
+
+  # A release RPC cannot signal an ordinary CLI error by raising: the release
+  # prints a stack trace before the local Mix task can format the error. Keep
+  # the result as data across the RPC and let the local task choose its exit code.
+  def remote_main(args) do
+    :ok = :io.setopts(:standard_io, encoding: :unicode)
+
+    response =
+      case run(args, :remote_cli) do
+        {:ok, output} -> %{"ok" => output}
+        {:error, reason} -> %{"error" => error_message(args, reason)}
+      end
+
+    IO.puts(Jason.encode!(response))
+    :ok
+  end
+
+  def error_message(args, reason)
+
+  def error_message(args, :not_found) do
+    case command(args) do
+      {["result", id], instance} -> "invocation #{id} not found in instance #{instance}"
+      {_command, instance} -> "requested item not found in instance #{instance}"
+    end
+  end
+
+  def error_message(args, :instance_not_found) do
+    {_command, instance} = command(args)
+    "instance #{instance} not found"
+  end
+
+  def error_message(args, :busy) do
+    {_command, instance} = command(args)
+    "instance #{instance} is busy"
+  end
+
+  def error_message(args, :unknown_job) do
+    case command(args) do
+      {[command, name], _instance} when command in ["job", "run-job"] ->
+        "job #{name} not found"
+
+      _ ->
+        "job not found"
+    end
+  end
+
+  def error_message(_args, :usage),
+    do:
+      "usage: gen_agent_server instances | jobs | job NAME | run-job NAME | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+
+  def error_message(args, {:unknown_agent, name}) do
+    {_command, instance} = command(args)
+    "agent #{name} not found in instance #{instance}"
+  end
+
+  def error_message(_args, reason), do: "GenAgent request failed: #{inspect(reason)}"
+
+  defp command(["--instance", instance | args]), do: {args, instance}
+  defp command(args), do: {args, GenAgentServer.session_name()}
 end
