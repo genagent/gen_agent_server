@@ -4,7 +4,7 @@ defmodule GenAgentServer.MixProject do
   def project do
     [
       app: :gen_agent_server,
-      version: "0.1.0-dev",
+      version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps()
@@ -23,7 +23,7 @@ defmodule GenAgentServer.MixProject do
       {:gen_agent_codex, "~> 0.4.0"},
       {:jason, "~> 1.4"},
       {:quantum, "~> 3.5"},
-      {:snodo, "~> 0.4.0"},
+      {:snodo, "~> 0.4.1"},
       {:telemetry, "~> 1.0"}
     ]
   end

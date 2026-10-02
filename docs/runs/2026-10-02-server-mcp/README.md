@@ -32,8 +32,17 @@ that built release. The client discovered six tools, asked Echo, invoked Echo,
 and read the same completed result twice. The same built release then handled
 one live MCP `ask` through Codex and one through Claude with `READY` replies
 and session IDs; `real_provider_probe.exs` records the exact control code.
-Codex completed in 4,429 ms and Claude in 3,055 ms. Publication against
-Snodo 0.4.1 remains a release gate.
+Codex completed in 4,429 ms and Claude in 3,055 ms.
+
+After [PR #71](https://github.com/genagent/gen_agent_server/pull/71) merged,
+the release branch resolved published Snodo 0.4.1, Codex adapter 0.4.3,
+Codex wrapper 0.5.4, and Ensemble 0.6.1. Host checks again passed formatting,
+warnings-as-errors compilation, all 71 tests, the Echo Pipeline/Supervisor
+example, and an OTP 0.1.0 build. `MIX_ENV=prod mix run
+examples/mcp_release_smoke.exs` connected through the release's real stdio
+entry point and checked discovery, ask, invoke, and repeatable result reads.
+The saved `real_provider_probe.exs` again completed live Codex and Claude
+MCP asks with `READY` responses and session IDs (5,862 ms and 3,135 ms).
 
 Mechanical observations: a worker's source visibility must be checked before
 implementation; the Snodo tool callback uses `{:ok, result}`; the stdio
