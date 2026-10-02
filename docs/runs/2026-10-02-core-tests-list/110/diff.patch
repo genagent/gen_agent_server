@@ -1,0 +1,173 @@
+test/gen_agent/event_test.exs           |  9 +++---
+ test/gen_agent/integration_test.exs     | 17 +++++------
+ test/gen_agent/lifecycle_hooks_test.exs | 51 +++++++++++++++++++--------------
+ test/gen_agent/server_test.exs          |  5 +---
+ 4 files changed, 44 insertions(+), 38 deletions(-)
+
+diff --git a/test/gen_agent/event_test.exs b/test/gen_agent/event_test.exs
+index 2a5375e..4da17c0 100644
+--- a/test/gen_agent/event_test.exs
++++ b/test/gen_agent/event_test.exs
+@@ -16,11 +16,12 @@ defmodule GenAgent.EventTest do
+     end
+ 
+     test "stamps a monotonic timestamp" do
+-      e1 = Event.new(:text, %{text: "a"})
+-      Process.sleep(2)
+-      e2 = Event.new(:text, %{text: "b"})
++      before_ts = System.monotonic_time(:millisecond)
++      event = Event.new(:text, %{text: "a"})
++      after_ts = System.monotonic_time(:millisecond)
+ 
+-      assert e2.timestamp >= e1.timestamp
++      assert event.timestamp >= before_ts
++      assert event.timestamp <= after_ts
+     end
+   end
+ 
+diff --git a/test/gen_agent/integration_test.exs b/test/gen_agent/integration_test.exs
+index f912310..2b37492 100644
+--- a/test/gen_agent/integration_test.exs
++++ b/test/gen_agent/integration_test.exs
+@@ -452,15 +452,16 @@ defmodule GenAgent.IntegrationTest do
+   # ---------------------------------------------------------------------------
+ 
+   describe "use GenAgent" do
+-    test "provides default handle_event that keeps state" do
+-      # SimpleAgent does not override handle_event -- the default from the
+-      # use macro should accept any event and return :noreply.
+-      name = start_simple([])
+-      assert :ok = GenAgent.notify(name, {:random_event, 1})
++    test "generates default handle_event/2 and handle_error/3 that keep state" do
++      # SimpleAgent overrides neither; call the macro-generated defaults
++      # directly, since the server falls back when they are missing.
++      state = %SimpleAgent.State{responses: [{make_ref(), "x"}]}
++
++      assert function_exported?(SimpleAgent, :handle_event, 2)
++      assert function_exported?(SimpleAgent, :handle_error, 3)
+ 
+-      # Agent should still be idle and alive with unchanged state.
+-      Process.sleep(10)
+-      assert GenAgent.status(name).state == :idle
++      assert {:noreply, ^state} = SimpleAgent.handle_event({:random_event, 1}, state)
++      assert {:noreply, ^state} = SimpleAgent.handle_error(make_ref(), :boom, state)
+     end
+   end
+ 
+diff --git a/test/gen_agent/lifecycle_hooks_test.exs b/test/gen_agent/lifecycle_hooks_test.exs
+index 06394fc..6932acd 100644
+--- a/test/gen_agent/lifecycle_hooks_test.exs
++++ b/test/gen_agent/lifecycle_hooks_test.exs
+@@ -70,25 +70,25 @@ defmodule GenAgent.LifecycleHooksTest do
+       parent = self()
+ 
+       pre_run = fn state ->
+-        send(parent, {:ordering, :pre_run})
+-        {:ok, state}
++        {:ok, %{state | extra: Map.put(state.extra, :pre_run_ran, true)}}
+       end
+ 
+-      responder = fn _ref, _resp, state ->
+-        send(parent, {:ordering, :handle_response})
+-        {:noreply, state}
++      # pre_turn runs at dispatch; report whether pre_run had already
++      # updated the state by then.
++      pre_turn = fn prompt, state ->
++        send(parent, {:pre_turn_saw, state.extra[:pre_run_ran]})
++        {:ok, prompt, state}
+       end
+ 
+       pid =
+         start_server(task_sup, [result_events("ok")],
+           pre_run: pre_run,
+-          responder: responder
++          pre_turn: pre_turn
+         )
+ 
+       assert {:ok, _} = ask(pid, "go")
+ 
+-      assert_received {:ordering, :pre_run}
+-      assert_received {:ordering, :handle_response}
++      assert_received {:pre_turn_saw, true}
+     end
+ 
+     test "error return stops the agent with :pre_run_failed", %{task_sup: task_sup} do
+@@ -144,14 +144,17 @@ defmodule GenAgent.LifecycleHooksTest do
+         {:ok, "[prefix] " <> prompt, state}
+       end
+ 
+-      # Mock backend records the prompt it receives in Mock state;
+-      # use the result events but also assert the rewritten prompt
+-      # reached the dispatch via telemetry (below test covers telemetry).
+-      pid =
+-        start_server(task_sup, [result_events("ok")], pre_turn: pre_turn)
++      # A function script receives the prompt the backend was given.
++      script = fn prompt ->
++        send(parent, {:backend_prompt, prompt})
++        result_events("ok")
++      end
++
++      pid = start_server(task_sup, [script], pre_turn: pre_turn)
+ 
+       assert {:ok, _} = ask(pid, "hello")
+       assert_received {:rewrote, "hello"}
++      assert_received {:backend_prompt, "[prefix] hello"}
+     end
+ 
+     test ":skip delivers :pre_turn_skipped to ask caller", %{task_sup: task_sup} do
+@@ -239,25 +242,29 @@ defmodule GenAgent.LifecycleHooksTest do
+     test "runs between decision callback and transition", %{task_sup: task_sup} do
+       parent = self()
+ 
+-      responder = fn _ref, _resp, state ->
+-        send(parent, {:ordering, :handle_response})
+-        {:noreply, state}
++      record = fn state, entry ->
++        %{state | extra: Map.update(state.extra, :trace, [entry], &(&1 ++ [entry]))}
+       end
+ 
+-      post_turn = fn _outcome, _ref, state ->
+-        send(parent, {:ordering, :post_turn})
+-        {:ok, state}
++      responder = fn _ref, _resp, state -> {:halt, record.(state, :handle_response)} end
++      post_turn = fn _outcome, _ref, state -> {:ok, record.(state, :post_turn)} end
++
++      # post_run fires on the halt transition, so the trace it sees must
++      # have the decision callback first and post_turn second.
++      post_run = fn state ->
++        send(parent, {:trace, state.extra[:trace]})
++        :ok
+       end
+ 
+       pid =
+         start_server(task_sup, [result_events("ok")],
+           responder: responder,
+-          post_turn: post_turn
++          post_turn: post_turn,
++          post_run: post_run
+         )
+ 
+       assert {:ok, _} = ask(pid, "go")
+-      assert_received {:ordering, :handle_response}
+-      assert_received {:ordering, :post_turn}
++      assert_receive {:trace, [:handle_response, :post_turn]}, 500
+     end
+ 
+     test "crash is caught and transition proceeds", %{task_sup: task_sup} do
+diff --git a/test/gen_agent/server_test.exs b/test/gen_agent/server_test.exs
+index e1615b6..e563d55 100644
+--- a/test/gen_agent/server_test.exs
++++ b/test/gen_agent/server_test.exs
+@@ -733,11 +733,8 @@ defmodule GenAgent.ServerTest do
+       assert status(pid).halted
+     end
+ 
+-    test "default handle_error is {:noreply, state} (via use GenAgent)",
++    test "agent stays idle and usable after a failed turn with a noreply error handler",
+          %{task_sup: task_sup} do
+-      # Without an error_handler keyword, TestAgent defaults to noreply,
+-      # which mirrors the `use GenAgent` default. Verify a failed turn
+-      # leaves the agent idle and ready for more work.
+       pid = start_server(task_sup, [{:error, :boom}, result_events("ok after error")])
+ 
+       assert {:error, :boom} = ask(pid, "first")
