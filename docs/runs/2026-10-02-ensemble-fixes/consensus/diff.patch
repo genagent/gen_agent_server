@@ -1,0 +1,536 @@
+extensions/ensemble/guides/workflows/consensus.md  |  15 ++
+ .../lib/gen_agent_ensemble/strategies/consensus.ex | 101 +++++--
+ .../strategies/consensus_test.exs                  | 299 +++++++++++++++++++++
+ 3 files changed, 395 insertions(+), 20 deletions(-)
+
+diff --git a/extensions/ensemble/guides/workflows/consensus.md b/extensions/ensemble/guides/workflows/consensus.md
+index 1a50b82..ee1392e 100644
+--- a/extensions/ensemble/guides/workflows/consensus.md
++++ b/extensions/ensemble/guides/workflows/consensus.md
+@@ -125,6 +125,11 @@ to your verdict space.
+     * `:majority` -- more than N/2 agents agree on the same
+       verdict.
+     * `{:at_least, n}` -- at least `n` agents agree.
++
++  Convergence needs a unique leading verdict that meets the
++  threshold. When two verdicts tie for the highest count (for
++  example 2-2 with `{:at_least, 2}`), the round does not converge:
++  the panel is re-prompted, or diverges at the round cap.
+ - `:rounds` (optional) -- hard cap on rounds. Defaults to 3.
+ - `:reply` (optional) -- response shape:
+     * `:synthesis` (default) -- converged: verdict header +
+@@ -220,6 +225,16 @@ iex> E.await("arch-review", tok, 600_000) |> E.puts()
+   for `nil` verdicts in the `responses` of a `{:synthesize, fun}`
+   summary (or the abstains in the default reply), then tighten the
+   system prompt or parser.
++- **Turn errors are tolerated while the threshold is reachable.**
++  A provider error (rate limit, timeout) from one agent is recorded
++  as an abstain for that round, with a `nil` verdict and a rationale
++  describing the error. The threshold is computed from the fixed
++  panel size, so errors do not lower the votes required. If the
++  largest vote count plus the turns still outstanding can no longer
++  meet the threshold, the ask fails with the first `{agent, reason}`
++  seen in the round. `:unanimous` therefore fails on any turn error.
++  Errors are tracked per round: a re-prompted round starts clean and
++  dispatches to the failed agent again.
+ - **Re-prompts are pure text.** The strategy inserts the others'
+   rationales into each agent's next prompt. The agent's own
+   previous response stays in its backend's conversation memory.
+diff --git a/extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex b/extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex
+index 0b2e580..e1fd647 100644
+--- a/extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex
++++ b/extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex
+@@ -15,6 +15,11 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+   toward the threshold but don't block convergence either. The
+   abstaining agent still participates in subsequent rounds.
+ 
++  Convergence requires a **unique leading verdict** whose count meets
++  the threshold. If two verdicts tie for the highest count (possible
++  with `{:at_least, n}` when `n <= N/2`), the round does not converge:
++  the panel is re-prompted, or diverges at the round cap.
++
+   Unlike `GenAgentEnsemble.Strategies.Debate`, Consensus's output
+   is a *programmable decision*: the strategy holds a parsed verdict
+   atom and the reply synthesizes it alongside per-agent rationales.
+@@ -56,9 +61,18 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+ 
+   ## Failure semantics
+ 
+-    * A turn error aborts the round: the token fails with
+-      `{agent, reason}`, any in-flight parallel responses are
+-      discarded, the next queued prompt (if any) starts.
++    * A turn error is tolerated while the threshold is still
++      reachable. The failed agent is recorded as an abstain for the
++      round (nil verdict, an explanatory rationale, empty raw text) and
++      the round waits for the remaining agents. The panel size stays
++      fixed, so the required vote count does not shrink.
++    * If the largest current vote count plus the outstanding turns can
++      no longer meet the threshold, the token fails with the first
++      `{agent, reason}` of the round, any in-flight parallel responses
++      are discarded, and the next queued prompt (if any) starts.
++      `:unanimous` therefore fails on the first turn error.
++    * Tolerated errors are tracked per round. Each re-prompted round
++      starts clean, and a failed agent is dispatched again.
+     * Agent process death halts the session -- the panel size is
+       fixed; a missing agent invalidates the threshold.
+   """
+@@ -76,6 +90,7 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+     :rounds,
+     :reply_kind,
+     phase: :idle,
++    errors: [],
+     queue: nil,
+     usage: Usage.new()
+   ]
+@@ -140,7 +155,8 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+ 
+   defp start_or_queue(prompt, token, %{phase: :idle} = state) do
+     ops = for agent <- state.agents, do: {:dispatch, agent, prompt, token}
+-    {:ok, ops, %{state | usage: Usage.new(), phase: {:running, token, prompt, 1, %{}}}}
++    {:ok, ops,
++     %{state | usage: Usage.new(), errors: [], phase: {:running, token, prompt, 1, %{}}}}
+   end
+ 
+   defp start_or_queue(prompt, token, state) do
+@@ -153,19 +169,53 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+       {:running, token, original, round, pending} ->
+         state = %{state | usage: Usage.add(state.usage, agent, response.usage)}
+         parsed = parse_response(state.verdict_parser, response.text)
+-        pending = Map.put(pending, agent, parsed)
+-
+-        if map_size(pending) == length(state.agents) do
+-          complete_round(token, original, round, pending, state)
+-        else
+-          {:ok, [], %{state | phase: {:running, token, original, round, pending}}}
+-        end
++        record(agent, parsed, {token, original, round, pending}, state)
+ 
+       _ ->
+         {:ok, [], state}
+     end
+   end
+ 
++  defp record(agent, entry, {token, original, round, pending}, state) do
++    pending = Map.put(pending, agent, entry)
++    state = %{state | phase: {:running, token, original, round, pending}}
++
++    cond do
++      state.errors != [] and threshold_unreachable?(pending, state) ->
++        error = hd(state.errors)
++        fail_round(token, error, state)
++
++      map_size(pending) == length(state.agents) ->
++        complete_round(token, original, round, pending, %{state | errors: []})
++
++      true ->
++        {:ok, [], state}
++    end
++  end
++
++  defp threshold_unreachable?(pending, state) do
++    n_agents = length(state.agents)
++
++    best =
++      pending
++      |> Enum.flat_map(fn {_agent, {v, _, _}} -> List.wrap(v) end)
++      |> Enum.frequencies()
++      |> Map.values()
++      |> Enum.max(fn -> 0 end)
++
++    best + (n_agents - map_size(pending)) < required_votes(state.threshold, n_agents)
++  end
++
++  defp required_votes(:unanimous, n_agents), do: n_agents
++  defp required_votes(:majority, n_agents), do: div(n_agents, 2) + 1
++  defp required_votes({:at_least, n}, _n_agents), do: n
++
++  defp fail_round(token, error, state) do
++    state = %{state | phase: :idle, errors: []}
++    {ops, state} = maybe_start_next(state, [{:reply_error, token, error}])
++    {:ok, ops, state}
++  end
++
+   defp parse_response(parser, text) do
+     case parser.(text) do
+       {:ok, verdict, rationale} when is_atom(verdict) and is_binary(rationale) ->
+@@ -218,9 +268,15 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+   end
+ 
+   defp check_threshold(counts, needed) do
+-    case Enum.max_by(counts, fn {_v, c} -> c end, fn -> nil end) do
+-      {verdict, count} when count >= needed -> {:converged, verdict}
+-      _ -> :not_converged
++    case Enum.sort_by(counts, fn {_v, c} -> -c end) do
++      [{verdict, count}] when count >= needed ->
++        {:converged, verdict}
++
++      [{verdict, count}, {_, second} | _] when count >= needed and count > second ->
++        {:converged, verdict}
++
++      _ ->
++        :not_converged
+     end
+   end
+ 
+@@ -282,7 +338,7 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+       end
+ 
+     response = %Response{text: text, usage: Usage.to_usage(state.usage)}
+-    state = %{state | phase: :idle}
++    state = %{state | phase: :idle, errors: []}
+     {ops, state} = maybe_start_next(state, [{:reply, token, response}])
+     {:ok, ops, state}
+   end
+@@ -340,6 +396,7 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+         state = %{
+           state
+           | usage: Usage.new(),
++            errors: [],
+             phase: {:running, token, prompt, 1, %{}},
+             queue: rest
+         }
+@@ -354,10 +411,14 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+   @impl true
+   def handle_error(agent, reason, state) do
+     case state.phase do
+-      {:running, token, _, _, _} ->
+-        state = %{state | phase: :idle}
+-        {ops, state} = maybe_start_next(state, [{:reply_error, token, {agent, reason}}])
+-        {:ok, ops, state}
++      {:running, token, original, round, pending} ->
++        if Map.has_key?(pending, agent) do
++          {:ok, [], state}
++        else
++          state = %{state | errors: state.errors ++ [{agent, reason}]}
++          entry = {nil, "turn error: #{inspect(reason)}", ""}
++          record(agent, entry, {token, original, round, pending}, state)
++        end
+ 
+       _ ->
+         {:ok, [], state}
+@@ -370,7 +431,7 @@ defmodule GenAgentEnsemble.Strategies.Consensus do
+ 
+     case state.phase do
+       {:running, ^token, _, _, _} ->
+-        {ops, state} = maybe_start_next(%{state | phase: :idle, usage: Usage.new()}, [])
++        {ops, state} = maybe_start_next(%{state | phase: :idle, errors: [], usage: Usage.new()}, [])
+         {:ok, ops, state}
+ 
+       _ ->
+diff --git a/extensions/ensemble/test/gen_agent_ensemble/strategies/consensus_test.exs b/extensions/ensemble/test/gen_agent_ensemble/strategies/consensus_test.exs
+index f109ddf..a71cf86 100644
+--- a/extensions/ensemble/test/gen_agent_ensemble/strategies/consensus_test.exs
++++ b/extensions/ensemble/test/gen_agent_ensemble/strategies/consensus_test.exs
+@@ -51,6 +51,51 @@ defmodule GenAgentEnsemble.Strategies.ConsensusTest do
+     GenAgentEnsemble.start_link(name: name, strategy: Consensus, opts: opts)
+   end
+ 
++  # A script that blocks when the backend consumes its stream until the test
++  # sends `:release` to the pid announced as `{:reached, tag, pid}`.
++  defp gated(tag, events) do
++    test = self()
++
++    fn _prompt ->
++      Stream.flat_map([:gate], fn _ ->
++        send(test, {:reached, tag, self()})
++
++        receive do
++          :release -> :ok
++        after
++          5_000 -> flunk("gate #{inspect(tag)} was never released")
++        end
++
++        events
++      end)
++    end
++  end
++
++  defp gated_error(tag, reason), do: gated(tag, [Event.new(:error, %{reason: reason})])
++
++  defp gated_say(tag, text), do: gated(tag, [Event.new(:result, %{text: text})])
++
++  defp release(tag) do
++    assert_receive {:reached, ^tag, pid}, 2_000
++    send(pid, :release)
++  end
++
++  defp wait_responded(name, count, retries \\ 100) do
++    {:ok, info} = GenAgentEnsemble.status(name)
++
++    case info.phase do
++      %{responded: ^count} ->
++        :ok
++
++      _ when retries > 0 ->
++        Process.sleep(20)
++        wait_responded(name, count, retries - 1)
++
++      other ->
++        flunk("expected #{count} responses, got: #{inspect(other)}")
++    end
++  end
++
+   defp await_completion(name, token, retries \\ 100) do
+     case GenAgentEnsemble.poll(name, token) do
+       {:ok, :completed, response} ->
+@@ -282,6 +327,260 @@ defmodule GenAgentEnsemble.Strategies.ConsensusTest do
+     assert info.phase == :idle
+   end
+ 
++  describe "tied thresholds" do
++    test "2-2 split with {:at_least, 2} does not converge", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [say("x.\nVERDICT: APPROVE")]},
++            {"b", [say("x.\nVERDICT: REJECT")]},
++            {"c", [say("x.\nVERDICT: APPROVE")]},
++            {"d", [say("x.\nVERDICT: REJECT")]}
++          ],
++          threshold: {:at_least, 2},
++          rounds: 1
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ "DIVERGED AFTER 1 ROUND"
++      refute resp.text =~ "CONSENSUS"
++    end
++
++    test "agent order does not change a tied result", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"d", [say("x.\nVERDICT: REJECT")]},
++            {"c", [say("x.\nVERDICT: APPROVE")]},
++            {"b", [say("x.\nVERDICT: REJECT")]},
++            {"a", [say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: {:at_least, 2},
++          rounds: 1
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ "DIVERGED"
++    end
++
++    test "tie resolves in the next round", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [say("x.\nVERDICT: APPROVE"), say("x.\nVERDICT: APPROVE")]},
++            {"b", [say("x.\nVERDICT: REJECT"), say("x.\nVERDICT: APPROVE")]},
++            {"c", [say("x.\nVERDICT: APPROVE"), say("x.\nVERDICT: APPROVE")]},
++            {"d", [say("x.\nVERDICT: REJECT"), say("x.\nVERDICT: REJECT")]}
++          ],
++          threshold: {:at_least, 2},
++          rounds: 3
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ "CONSENSUS: :approve (3 of 4 agreed via at_least 2, round 2)"
++    end
++
++    test "unequal counts above a low threshold converge on the leader", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [say("x.\nVERDICT: REJECT")]},
++            {"b", [say("x.\nVERDICT: APPROVE")]},
++            {"c", [say("x.\nVERDICT: APPROVE")]},
++            {"d", [say("x.\nVERDICT: APPROVE")]},
++            {"e", [say("x.\nVERDICT: REJECT")]}
++          ],
++          threshold: {:at_least, 2},
++          rounds: 1
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ "CONSENSUS: :approve (3 of 5"
++    end
++  end
++
++  describe "turn errors" do
++    test "one error is tolerated when the majority is still reachable", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [{:error, :boom}]},
++            {"b", [say("x.\nVERDICT: APPROVE")]},
++            {"c", [say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: :majority,
++          rounds: 2
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ "CONSENSUS: :approve (2 of 3 agreed via majority, round 1)"
++      assert resp.text =~ "a [abstain]"
++      assert resp.text =~ "boom"
++    end
++
++    test "error arriving after the votes is tolerated", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [gated_error(:a, :late)]},
++            {"b", [say("x.\nVERDICT: APPROVE")]},
++            {"c", [say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: {:at_least, 2},
++          rounds: 1
++        )
++
++      {:ok, token} = GenAgentEnsemble.tell(name, "merge?")
++      wait_responded(name, 2)
++      release(:a)
++
++      assert {:ok, resp} = GenAgentEnsemble.await(name, token, 5_000)
++      assert resp.text =~ "CONSENSUS: :approve"
++      assert resp.text =~ "a [abstain]"
++    end
++
++    test "{:at_least, n} tolerates multiple errors while reachable", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [{:error, :one}]},
++            {"b", [{:error, :two}]},
++            {"c", [say("x.\nVERDICT: APPROVE")]},
++            {"d", [say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: {:at_least, 2},
++          rounds: 1
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ "CONSENSUS: :approve (2 of 4"
++    end
++
++    test "fails with the first original error when the majority becomes impossible",
++         %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [gated_error(:a, :first)]},
++            {"b", [gated_error(:b, :second)]},
++            {"c", [say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: :majority,
++          rounds: 2
++        )
++
++      {:ok, token} = GenAgentEnsemble.tell(name, "merge?")
++      wait_responded(name, 1)
++      release(:a)
++      wait_responded(name, 2)
++      release(:b)
++
++      assert {:error, {"a", :first}} = GenAgentEnsemble.await(name, token, 5_000)
++
++      Process.sleep(30)
++      {:ok, info} = GenAgentEnsemble.status(name)
++      assert info.phase == :idle
++    end
++
++    test "fails when a later response makes the threshold impossible", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [{:error, :boom}]},
++            {"b", [gated_say(:b, "x.\nVERDICT: APPROVE")]},
++            {"c", [gated_say(:c, "x.\nVERDICT: REJECT")]}
++          ],
++          threshold: :majority,
++          rounds: 2
++        )
++
++      {:ok, token} = GenAgentEnsemble.tell(name, "merge?")
++      wait_responded(name, 1)
++      release(:b)
++      wait_responded(name, 2)
++      release(:c)
++
++      assert {:error, {"a", :boom}} = GenAgentEnsemble.await(name, token, 5_000)
++    end
++
++    test "tolerated error is round-local and the agent is dispatched again", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [gated_error(:a, :boom), say("x.\nVERDICT: APPROVE")]},
++            {"b", [say("x.\nVERDICT: APPROVE"), say("x.\nVERDICT: APPROVE")]},
++            {"c", [say("x.\nVERDICT: REJECT"), say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: {:at_least, 1},
++          rounds: 2
++        )
++
++      {:ok, token} = GenAgentEnsemble.tell(name, "merge?")
++      wait_responded(name, 2)
++      release(:a)
++
++      assert {:ok, resp} = GenAgentEnsemble.await(name, token, 5_000)
++      assert resp.text =~ "CONSENSUS: :approve (3 of 3 agreed via at_least 1, round 2)"
++    end
++
++    test "failure does not leak into the next queued run", %{name: name} do
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [gated_error(:a, :boom), say("x.\nVERDICT: APPROVE")]},
++            {"b", [say("x.\nVERDICT: APPROVE"), say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: :unanimous,
++          rounds: 2
++        )
++
++      {:ok, t1} = GenAgentEnsemble.tell(name, "one")
++      assert_receive {:reached, :a, pid}, 2_000
++      {:ok, t2} = GenAgentEnsemble.tell(name, "two")
++
++      {:ok, info} = GenAgentEnsemble.status(name)
++      assert info.queued == 1
++      send(pid, :release)
++
++      assert {:error, {"a", :boom}} = GenAgentEnsemble.await(name, t1, 5_000)
++      assert {:ok, resp} = GenAgentEnsemble.await(name, t2, 5_000)
++      assert resp.text =~ "CONSENSUS: :approve"
++    end
++
++    test "tolerated error keeps the custom synthesis shape", %{name: name} do
++      synth = fn summary ->
++        inspect(summary.responses)
++      end
++
++      {:ok, _} =
++        start_consensus(
++          name,
++          [
++            {"a", [{:error, :boom}]},
++            {"b", [say("x.\nVERDICT: APPROVE")]},
++            {"c", [say("x.\nVERDICT: APPROVE")]}
++          ],
++          threshold: :majority,
++          rounds: 1,
++          reply: {:synthesize, synth}
++        )
++
++      {:ok, resp} = GenAgentEnsemble.ask(name, "merge?", timeout: 5_000)
++      assert resp.text =~ ~s({"a", nil, "turn error: :boom", ""})
++    end
++  end
++
+   test "agent death halts the session", %{name: name} do
+     {:ok, pid} =
+       start_consensus(name, [

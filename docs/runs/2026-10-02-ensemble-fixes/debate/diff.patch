@@ -1,0 +1,251 @@
+extensions/ensemble/guides/workflows/debate.md     | 30 ++++++++-----
+ .../lib/gen_agent_ensemble/strategies/debate.ex    | 34 +++++++-------
+ .../gen_agent_ensemble/strategies/debate_test.exs  | 52 ++++++++++++++++++++--
+ 3 files changed, 86 insertions(+), 30 deletions(-)
+
+diff --git a/extensions/ensemble/guides/workflows/debate.md b/extensions/ensemble/guides/workflows/debate.md
+index 155adf8..82e0bfc 100644
+--- a/extensions/ensemble/guides/workflows/debate.md
++++ b/extensions/ensemble/guides/workflows/debate.md
+@@ -2,10 +2,11 @@
+ 
+ ## Topology
+ 
+-Two agents take turns arguing about a topic. The prompt hits the
+-first agent; that agent's response becomes the second agent's
+-prompt; the second agent's response becomes the first agent's next
+-prompt; and so on until they converge or a round cap is reached.
++Two agents take turns arguing about a topic. The first agent receives
++the original prompt. On turn 2 and beyond, each agent receives the
++original prompt, the previous speaker's name, and that speaker's
++response text. The debate continues until convergence or a round cap
++is reached.
+ 
+ ```
+ +-------+    +--------+        +-------+        +-------+
+@@ -14,19 +15,26 @@ prompt; and so on until they converge or a round cap is reached.
+                                    ^        \_____|
+                                    |______________|
+ 
+-turn 1:  "Topic X"          -> alice -> "opener"
+-turn 2:   "opener"           -> bob   -> "rebuttal"
+-turn 3:   "rebuttal"         -> alice -> "counter"
+-turn 4:   "counter"          -> bob   -> "AGREED on Y"  (converged)
++turn 1:  "Topic X"
++         -> alice -> "opener"
++
++turn 2:  "Topic X" + "alice: opener"
++         -> bob   -> "rebuttal"
++
++turn 3:  "Topic X" + "bob: rebuttal"
++         -> alice -> "counter"
++
++turn 4:  "Topic X" + "alice: counter"
++         -> bob   -> "AGREED on Y"  (converged)
+ 
+ final reply: transcript of all 4 turns, or last, or synthesized.
+ ```
+ 
+ Each agent's backend session retains the full back-and-forth in its
+ own conversation memory, so turn N sees turns 1..N-1 in context.
+-The prompt wire format is just the previous agent's response text
+-(same convention as Pipeline), so the first turn's prompt is what
+-establishes the topic.
++The first turn receives the original question unchanged. Later turns
++include the original question plus the previous agent's name and response,
++so each agent knows who they are responding to and what the original topic was.
+ 
+ ## When to reach for it
+ 
+diff --git a/extensions/ensemble/lib/gen_agent_ensemble/strategies/debate.ex b/extensions/ensemble/lib/gen_agent_ensemble/strategies/debate.ex
+index 99181d7..1d887c5 100644
+--- a/extensions/ensemble/lib/gen_agent_ensemble/strategies/debate.ex
++++ b/extensions/ensemble/lib/gen_agent_ensemble/strategies/debate.ex
+@@ -3,11 +3,11 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+   Two agents take turns arguing about a prompt until they converge
+   or a round cap is reached.
+ 
+-  The incoming prompt hits the first agent. That agent's response
+-  text becomes the prompt for the second agent, whose response
+-  becomes the prompt for the first again, and so on. Each agent's
+-  own `GenAgent` session keeps the full back-and-forth in its
+-  backend memory, so turn N sees turns 1..N-1 in context.
++  The incoming prompt hits the first agent. On turn 2 and beyond,
++  each agent receives the original question, the previous speaker's
++  name, and that speaker's response text. Each agent's own `GenAgent`
++  session keeps the full back-and-forth in its backend memory, so
++  turn N sees turns 1..N-1 in context.
+ 
+   ## Options
+ 
+@@ -54,6 +54,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+     :rounds,
+     :converge,
+     :reply_kind,
++    :original_prompt,
+     agents: MapSet.new(),
+     phase: :idle,
+     queue: nil,
+@@ -111,7 +112,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+   def handle_ask(prompt, _opts, token, state), do: start_or_queue(prompt, token, state)
+ 
+   defp start_or_queue(prompt, token, %{phase: :idle} = state) do
+-    phase = {:running, token, state.first, 0, []}
++    phase = {:running, token, state.first, 0, [], prompt}
+     {:ok, [{:dispatch, state.first, prompt, token}], %{state | phase: phase, usage: Usage.new()}}
+   end
+ 
+@@ -122,15 +123,15 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+   @impl true
+   def handle_response(agent, response, state) do
+     case state.phase do
+-      {:running, token, awaiting, turns, transcript} when agent == awaiting ->
+-        advance(token, agent, response, turns, transcript, state)
++      {:running, token, awaiting, turns, transcript, original_prompt} when agent == awaiting ->
++        advance(token, agent, response, turns, transcript, original_prompt, state)
+ 
+       _ ->
+         {:ok, [], state}
+     end
+   end
+ 
+-  defp advance(token, agent, response, turns, transcript, state) do
++  defp advance(token, agent, response, turns, transcript, original_prompt, state) do
+     state = %{state | usage: Usage.add(state.usage, agent, response.usage)}
+     transcript = transcript ++ [{agent, response.text}]
+     turns = turns + 1
+@@ -140,9 +141,10 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+       finalize(token, transcript, state)
+     else
+       other = other_agent(agent, state)
++      next_prompt = "#{original_prompt}\n\n#{agent}:\n#{response.text}"
+ 
+-      {:ok, [{:dispatch, other, response.text, token}],
+-       %{state | phase: {:running, token, other, turns, transcript}}}
++      {:ok, [{:dispatch, other, next_prompt, token}],
++       %{state | phase: {:running, token, other, turns, transcript, original_prompt}}}
+     end
+   end
+ 
+@@ -179,7 +181,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+       {:ok, {token, prompt}, rest} ->
+         state = %{
+           state
+-          | phase: {:running, token, state.first, 0, []},
++          | phase: {:running, token, state.first, 0, [], prompt},
+             queue: rest,
+             usage: Usage.new()
+         }
+@@ -194,7 +196,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+   @impl true
+   def handle_error(_agent, reason, state) do
+     case state.phase do
+-      {:running, token, _, _, _} ->
++      {:running, token, _, _, _, _} ->
+         state = %{state | phase: :idle}
+         {ops, state} = maybe_start_next(state, [{:reply_error, token, reason}])
+         {:ok, ops, state}
+@@ -209,7 +211,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+     state = %{state | queue: Queue.delete(state.queue, token)}
+ 
+     case state.phase do
+-      {:running, ^token, _, _, _} ->
++      {:running, ^token, _, _, _, _} ->
+         {ops, state} = maybe_start_next(%{state | phase: :idle, usage: Usage.new()}, [])
+         {:ok, ops, state}
+ 
+@@ -221,7 +223,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+   @impl true
+   def handle_dispatch_rejected(agent, token, reason, state) do
+     case state.phase do
+-      {:running, ^token, _, _, _} -> handle_error(agent, reason, state)
++      {:running, ^token, _, _, _, _} -> handle_error(agent, reason, state)
+       _ -> {:ok, [{:reply_error, token, reason}], state}
+     end
+   end
+@@ -241,7 +243,7 @@ defmodule GenAgentEnsemble.Strategies.Debate do
+         :idle ->
+           :idle
+ 
+-        {:running, _token, awaiting, turns, transcript} ->
++        {:running, _token, awaiting, turns, transcript, _original_prompt} ->
+           %{awaiting: awaiting, turns: turns, transcript_len: length(transcript)}
+       end
+ 
+diff --git a/extensions/ensemble/test/gen_agent_ensemble/strategies/debate_test.exs b/extensions/ensemble/test/gen_agent_ensemble/strategies/debate_test.exs
+index 2117bd9..9e803c3 100644
+--- a/extensions/ensemble/test/gen_agent_ensemble/strategies/debate_test.exs
++++ b/extensions/ensemble/test/gen_agent_ensemble/strategies/debate_test.exs
+@@ -63,7 +63,7 @@ defmodule GenAgentEnsemble.Strategies.DebateTest do
+     assert resp.text == "alice:\na1\n\nbob:\nb1\n\nalice:\na2\n\nbob:\nb2"
+   end
+ 
+-  test "each agent sees the previous agent's response as its prompt", %{name: name} do
++  test "each agent sees the original prompt and previous speaker's response", %{name: name} do
+     alice_agent = :ets.new(:alice_prompts, [:public, :set])
+     bob_agent = :ets.new(:bob_prompts, [:public, :set])
+ 
+@@ -89,8 +89,15 @@ defmodule GenAgentEnsemble.Strategies.DebateTest do
+     alice_prompts = :ets.tab2list(alice_agent) |> Enum.sort() |> Enum.map(&elem(&1, 1))
+     bob_prompts = :ets.tab2list(bob_agent) |> Enum.sort() |> Enum.map(&elem(&1, 1))
+ 
+-    assert alice_prompts == ["opening", "b:y1"]
+-    assert bob_prompts == ["a:x1", "a:x2"]
++    # Alice's first turn gets the opening prompt unchanged
++    assert Enum.at(alice_prompts, 0) == "opening"
++    # Alice's second turn gets opening + bob's first response with speaker label
++    assert Enum.at(alice_prompts, 1) == "opening\n\nbob:\nb:y1"
++
++    # Bob's first turn gets opening + alice's first response with speaker label
++    assert Enum.at(bob_prompts, 0) == "opening\n\nalice:\na:x1"
++    # Bob's second turn gets opening + alice's second response with speaker label
++    assert Enum.at(bob_prompts, 1) == "opening\n\nalice:\na:x2"
+   end
+ 
+   test "converge fn ends the debate early", %{name: name} do
+@@ -225,6 +232,45 @@ defmodule GenAgentEnsemble.Strategies.DebateTest do
+     assert %{text: "alice:\na2\n\nbob:\nb2"} = await_completion(name, t2)
+   end
+ 
++  test "queued debates get their own original prompt without leakage", %{name: name} do
++    alice_agent = :ets.new(:alice_prompts_q, [:public, :set])
++    bob_agent = :ets.new(:bob_prompts_q, [:public, :set])
++
++    record = fn table, label, reply_text ->
++      fn prompt ->
++        :ets.insert(table, {System.unique_integer([:monotonic]), prompt})
++        [Event.new(:result, %{text: "#{label}:#{reply_text}"})]
++      end
++    end
++
++    {:ok, _} =
++      start_debate(
++        name,
++        [
++          {"alice", [record.(alice_agent, "a", "x1"), record.(alice_agent, "a", "x2")]},
++          {"bob", [record.(bob_agent, "b", "y1"), record.(bob_agent, "b", "y2")]}
++        ],
++        rounds: 2
++      )
++
++    {:ok, t1} = GenAgentEnsemble.tell(name, "first debate topic")
++    {:ok, t2} = GenAgentEnsemble.tell(name, "second debate topic")
++
++    await_completion(name, t1)
++    await_completion(name, t2)
++
++    alice_prompts = :ets.tab2list(alice_agent) |> Enum.sort() |> Enum.map(&elem(&1, 1))
++    bob_prompts = :ets.tab2list(bob_agent) |> Enum.sort() |> Enum.map(&elem(&1, 1))
++
++    # First debate uses "first debate topic"
++    assert Enum.at(alice_prompts, 0) == "first debate topic"
++    assert String.starts_with?(Enum.at(bob_prompts, 0), "first debate topic\n\n")
++
++    # Second debate uses "second debate topic" - no leakage from first
++    assert Enum.at(alice_prompts, 1) == "second debate topic"
++    assert String.starts_with?(Enum.at(bob_prompts, 1), "second debate topic\n\n")
++  end
++
+   test "agent death halts the session", %{name: name} do
+     {:ok, pid} =
+       start_debate(name, [

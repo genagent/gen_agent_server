@@ -1,0 +1,52 @@
+{
+  "instance": "handoff/3975",
+  "project": "/tmp/gen_agent_fix_209_20261002",
+  "stages": {
+    "implement": {
+      "usage": {
+        "input_tokens": 18,
+        "output_tokens": 13118
+      },
+      "session_id": "4baa5004-1809-4e54-9e3a-08a650cfdc59",
+      "provider": "claude",
+      "elapsed_ms": 76830,
+      "stage": "implement",
+      "requested_model": "sonnet",
+      "model": "claude-sonnet-5-5"
+    },
+    "review": {
+      "usage": {
+        "cached_input_tokens": 134528,
+        "input_tokens": 168116,
+        "output_tokens": 1062
+      },
+      "session_id": "01a0fcb0-c5fa-7d42-95ff-33f10fab8a60",
+      "provider": "codex",
+      "elapsed_ms": 60562,
+      "stage": "review",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    },
+    "triage": {
+      "usage": {
+        "cached_input_tokens": 106752,
+        "input_tokens": 131153,
+        "output_tokens": 1338
+      },
+      "session_id": "01a0fcae-6e51-7d21-938a-53a64d3386bb",
+      "provider": "codex",
+      "elapsed_ms": 76620,
+      "stage": "triage",
+      "requested_model": "gpt-6-astra",
+      "model": "gpt-6-astra"
+    }
+  },
+  "base_commit": "7f848d4e89e41409d90b66e8e039af8eac9caa5d",
+  "verdict": "REQUEST CHANGES",
+  "changed_files": [
+    "extensions/ensemble/guides/workflows/consensus.md",
+    "extensions/ensemble/lib/gen_agent_ensemble/strategies/consensus.ex",
+    "extensions/ensemble/test/gen_agent_ensemble/strategies/consensus_test.exs"
+  ],
+  "untracked_files": []
+}
