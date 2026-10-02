@@ -386,7 +386,8 @@ defmodule GenAgentServerTest do
     prompt = ~S|What's "next"; #{GenAgentServer.stop()}|
     expression = GenAgentServer.Remote.expression(["ask", "echo", prompt])
 
-    assert capture_io(fn -> Code.eval_string(expression) end) == "echo: #{prompt}\n"
+    output = capture_io(fn -> Code.eval_string(expression) end)
+    assert {:ok, "echo: " <> ^prompt} = GenAgentServer.Remote.decode_response(output)
   end
 
   test "remote command reports an inaccessible release executable" do
