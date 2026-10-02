@@ -169,7 +169,7 @@ defmodule GenAgentServerTest do
 
     assert {:ok, id} = GenAgentServer.invoke(name, "review", "two parts")
 
-    assert {:ok, :completed, %{text: "echo: first\n\necho: second"}} =
+    assert {:ok, :completed, %{text: "### first\n\necho: first\n\n### second\n\necho: second"}} =
              await_result(name, id)
 
     assert {:ok, %{agents: ["coordinator"], routes: ["review"]}} = GenAgentServer.status(name)

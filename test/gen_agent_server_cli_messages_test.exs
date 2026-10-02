@@ -116,7 +116,7 @@ defmodule GenAgentServer.CLIMessagesTest do
     prefix = ["--instance", name]
     assert {:ok, id} = GenAgentServer.CLI.run(prefix ++ ["invoke", "review", "two parts"])
     assert {:ok, :completed, response} = await_result(name, id)
-    assert response.text == "echo: first\n\necho: second"
+    assert response.text == "### first\n\necho: first\n\n### second\n\necho: second"
     assert Map.get(response, :final_message) == nil
     assert {:ok, response.text} == GenAgentServer.CLI.run(prefix ++ ["result", id])
 
