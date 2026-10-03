@@ -119,10 +119,24 @@ per-test executable copy and directory. Focused executable tests passed 23;
 full Codex integration passed 103 tests with three live tests excluded;
 format, warnings-as-errors compile, strict Credo, Dialyzer (zero errors),
 docs, and diff checks passed. Independent read-only review found no issue.
-Commit `f6bacbc` is in
-[core PR #388](https://github.com/genagent/gen_agent/pull/388); CI was in
-progress at this log update. The Codex adapter release and closure of #186
-remain pending until that PR passes.
+Commit `f6bacbc` was merged through
+[core PR #388](https://github.com/genagent/gen_agent/pull/388) as
+`19561f7efdacce476ca4ec39d75b191f93a609b9` after all 19 PR CI
+checks passed. The Codex adapter Release Please
+[#387](https://github.com/genagent/gen_agent/pull/387) refreshed to
+include both #184 and #186 in version 0.4.7. It merged as
+`e0d0ab65f3e234160f4bcecd591db72039ed6d49` after an explicit
+three-file release diff inspection; the bot release branch's no-job CI
+workflow could not run, while both underlying fix PRs passed all 19
+checks. Release workflow `37135905618` succeeded. GitHub
+[gen_agent_codex-v0.4.7](https://github.com/genagent/gen_agent/releases/tag/gen_agent_codex-v0.4.7)
+and `mix hex.info gen_agent_codex 0.4.7` confirmed publication; Hex reports
+`codex_wrapper ~> 0.5.8`. The post-release main CI run `37135905575`
+passed its Codex integration lane while other package lanes were still
+running. Issue #186 was closed with publication and CI evidence, and its
+in-progress claim was removed. The preceding post-fix main CI run
+`37135745871` had also passed its Codex lane, with its Hex archives lane
+still running at this log update.
 
 No automated GenAgent Server issue-worker control code was created in this
 batch because the backlog threshold was not reached. The reusable control
