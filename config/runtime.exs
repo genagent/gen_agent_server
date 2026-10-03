@@ -39,12 +39,12 @@ agents =
           [backend: backend]
 
         "claude" ->
-          [backend: backend, cwd: cwd, permission_mode: :plan]
+          [backend: backend, working_dir: cwd, permission_mode: :plan]
 
         "codex" ->
           [
             backend: backend,
-            cwd: cwd,
+            working_dir: cwd,
             sandbox: :read_only,
             approval_policy: :never,
             ignore_user_config: true

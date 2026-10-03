@@ -64,7 +64,7 @@ defmodule GenAgentServer.Providers do
     with {:ok, cwd} <- fetch_cwd(opts),
          {:ok, mode} <- choice(opts, :claude_permission_mode, [:plan, :read_only, :accept_edits]),
          {:ok, effort} <- effort(opts, @claude_efforts) do
-      base = [backend: @backends["claude"], cwd: cwd] ++ claude_access_opts(mode)
+      base = [backend: @backends["claude"], working_dir: cwd] ++ claude_access_opts(mode)
       base = if effort, do: base ++ [effort: effort], else: base
       {:ok, maybe_model(base, opts)}
     end
@@ -75,7 +75,13 @@ defmodule GenAgentServer.Providers do
          {:ok, sandbox} <- choice(opts, :codex_sandbox, [:read_only, :workspace_write]),
          {:ok, user_config} <- choice(opts, :codex_user_config, [:ignore, :inherit]),
          {:ok, effort} <- effort(opts, @codex_efforts) do
-      base = [backend: @backends["codex"], cwd: cwd, sandbox: sandbox, approval_policy: :never]
+      base = [
+        backend: @backends["codex"],
+        working_dir: cwd,
+        sandbox: sandbox,
+        approval_policy: :never
+      ]
+
       base = if user_config == :ignore, do: base ++ [ignore_user_config: true], else: base
 
       base =

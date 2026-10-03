@@ -132,7 +132,7 @@ defmodule GenAgentServer.LifecycleTest do
                permission_mode: :dont_ask,
                tools: ["Read", "Grep", "Glob"],
                effort: :low,
-               cwd: ^dir
+               working_dir: ^dir
              } = Map.new(by_model["haiku-test"])
 
       assert %{permission_mode: :accept_edits, effort: :max} = Map.new(by_model["opus-test"])

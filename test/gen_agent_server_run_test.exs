@@ -15,6 +15,9 @@ defmodule GenAgentServer.RunTest do
       assert opts[:sandbox] == :read_only and opts[:approval_policy] == :never and
                opts[:model] == "m"
 
+      assert opts[:working_dir] == File.cwd!()
+      refute Keyword.has_key?(opts, :cwd)
+
       assert opts[:ignore_user_config] == true
 
       assert {:ok, inherited} =
@@ -27,6 +30,8 @@ defmodule GenAgentServer.RunTest do
 
       assert {:ok, opts} = Providers.backend_opts("claude", cwd: File.cwd!())
       assert opts[:permission_mode] == :plan
+      assert opts[:working_dir] == File.cwd!()
+      refute Keyword.has_key?(opts, :cwd)
 
       assert {:error, {:invalid_option, :codex_sandbox, :danger_full_access}} =
                Providers.backend_opts("codex",
