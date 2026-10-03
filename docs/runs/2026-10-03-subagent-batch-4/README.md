@@ -99,3 +99,15 @@ verified both default CLI entries contain `:working_dir` and omit `:cwd`.
 The full `mix test` suite passed 95 tests after that correction. Normal
 server startup now emits no directory-alias warning. No provider call was
 needed for the server consumption check.
+
+The server follow-up merged through
+[#95](https://github.com/genagent/gen_agent_server/pull/95) as
+`5d35187f00afd3fc36e1113e3c47ea5ff92dd57c` after its CI passed 95
+tests, warnings-as-errors compilation, formatting, examples, production OTP
+release construction, and a packaged MCP smoke test. Version-only
+[#96](https://github.com/genagent/gen_agent_server/pull/96) passed the same
+CI and merged as `8375a4b65f497b7360c6ae61001b7bb7fc33eac0`.
+[GenAgent Server 0.4.1](https://github.com/genagent/gen_agent_server/releases/tag/v0.4.1)
+was published from that exact commit and verified public. The parent did not
+change or remove any unrelated local checkout. The isolated worktrees were
+kept through publication for audit and can be removed after the final log PR.
