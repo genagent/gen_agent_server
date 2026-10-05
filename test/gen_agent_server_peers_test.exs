@@ -214,8 +214,10 @@ defmodule GenAgentServer.PeersTest do
 
   test "a failed write-ahead ledger prevents delivery", c do
     store = Path.join(c.root, "ledger.json")
-    {:ok, server} = Peers.start_link(Keyword.put(c.opts, :store, store))
-    on_exit(fn -> if Process.alive?(server), do: GenServer.stop(server) end)
+
+    server =
+      start_supervised!({Peers, Keyword.put(c.opts, :store, store)}, id: :failed_write_ahead)
+
     d = %{c | server: server}
     bind(d)
     File.rm!(store)
