@@ -211,6 +211,27 @@ defmodule GenAgentServer.LifecycleTest do
         %{"routes" => [%{"name" => "e", "provider" => "echo", "effort" => "low"}]},
         %{"routes" => [%{"name" => "e", "provider" => "echo", "model" => "m"}]},
         %{"routes" => [%{"name" => "e", "provider" => "echo", "codex_sandbox" => "read_only"}]},
+        %{
+          "routes" => [
+            %{"name" => "e", "provider" => "echo", "codex_response_text" => "final_message"}
+          ]
+        },
+        %{
+          "routes" => [
+            %{
+              "name" => "c",
+              "provider" => "claude",
+              "codex_response_text" => "final_message"
+            }
+          ],
+          "cwd" => dir
+        },
+        %{
+          "routes" => [
+            %{"name" => "c", "provider" => "codex", "codex_response_text" => "last_message"}
+          ],
+          "cwd" => dir
+        },
         %{"routes" => [route]},
         %{"routes" => [route], "cwd" => "relative/dir"},
         %{"routes" => [route], "cwd" => missing},
@@ -336,7 +357,16 @@ defmodule GenAgentServer.LifecycleTest do
         ]
       }
 
-      assert {:ok, %{"routes" => [%{"effort" => "high", "codex_sandbox" => "read_only"}]}} =
+      assert {:ok,
+              %{
+                "routes" => [
+                  %{
+                    "effort" => "high",
+                    "codex_sandbox" => "read_only",
+                    "codex_response_text" => "all_messages"
+                  }
+                ]
+              }} =
                Ops.call("create_instance", %{"instance" => name, "config" => config})
 
       for prompt <- ["first", "second"] do
@@ -358,6 +388,141 @@ defmodule GenAgentServer.LifecycleTest do
   end
 
   describe "MCP lifecycle" do
+    test "Codex response text flows through actual MCP lifecycle and resumed results", %{
+      client: client,
+      name: name,
+      dir: dir
+    } do
+      observer = self()
+
+      exec_fn = fn prompt, session ->
+        send(observer, {:codex_exec, prompt, session.thread_id, session.response_text})
+
+        {thread_id, commentary, final, usage} =
+          case prompt do
+            "default" -> {"thread-default", "default commentary", "default final", {5, 1}}
+            "first" -> {"thread-final", "first commentary", ~s({"answer":1}), {10, 2}}
+            "second" -> {"thread-final", "second commentary", ~s({"answer":2}), {20, 4}}
+          end
+
+        ndjson =
+          [
+            %{"type" => "thread.started", "thread_id" => thread_id},
+            %{
+              "type" => "item.completed",
+              "item" => %{"type" => "agent_message", "text" => commentary}
+            },
+            %{
+              "type" => "item.completed",
+              "item" => %{"type" => "agent_message", "text" => final}
+            },
+            %{
+              "type" => "turn.completed",
+              "usage" => %{"input_tokens" => elem(usage, 0), "output_tokens" => elem(usage, 1)}
+            }
+          ]
+          |> Enum.map_join("\n", &Jason.encode!/1)
+
+        {:ok, CodexWrapper.JsonLineEvent.parse_lines(ndjson)}
+      end
+
+      overrides = Application.get_env(:gen_agent_server, :provider_overrides, %{})
+
+      Application.put_env(
+        :gen_agent_server,
+        :provider_overrides,
+        Map.put(overrides, "codex", exec_fn: exec_fn)
+      )
+
+      config = %{
+        "cwd" => dir,
+        "routes" => [
+          %{"name" => "joined", "provider" => "codex"},
+          %{
+            "name" => "final",
+            "provider" => "codex",
+            "codex_response_text" => "final_message"
+          }
+        ]
+      }
+
+      created = ok!(client, "create_instance", %{"instance" => name, "config" => config})
+
+      assert %{
+               "routes" => [
+                 %{"name" => "joined", "codex_response_text" => "all_messages"},
+                 %{"name" => "final", "codex_response_text" => "final_message"}
+               ]
+             } = created
+
+      assert ok!(client, "describe_instance", %{"instance" => name}) == created
+
+      assert %{"id" => default_id} =
+               ok!(client, "invoke", %{
+                 "instance" => name,
+                 "agent" => "joined",
+                 "prompt" => "default"
+               })
+
+      assert eventually(fn ->
+               match?(
+                 %{"status" => "completed"},
+                 ok!(client, "result", %{"instance" => name, "id" => default_id})
+               )
+             end)
+
+      assert %{"text" => "default commentary\n\ndefault final"} =
+               ok!(client, "result", %{"instance" => name, "id" => default_id})
+
+      assert_receive {:codex_exec, "default", nil, :all_messages}
+
+      assert %{"id" => first_id} =
+               ok!(client, "invoke", %{
+                 "instance" => name,
+                 "agent" => "final",
+                 "prompt" => "first"
+               })
+
+      assert eventually(fn ->
+               match?(
+                 %{"status" => "completed"},
+                 ok!(client, "result", %{"instance" => name, "id" => first_id})
+               )
+             end)
+
+      first = ok!(client, "result", %{"instance" => name, "id" => first_id})
+      assert first["text"] == ~s({"answer":1})
+      assert Jason.decode!(first["text"]) == %{"answer" => 1}
+      assert ok!(client, "result", %{"instance" => name, "id" => first_id}) == first
+      assert_receive {:codex_exec, "first", nil, :final_message}
+      refute_received {:codex_exec, "first", _, _}
+
+      assert {:ok, :completed, response} = GenAgentServer.result(name, first_id)
+
+      assert for(%GenAgent.Event{kind: :text, data: %{text: text}} <- response.events, do: text) ==
+               ["first commentary", ~s({"answer":1})]
+
+      assert %{"id" => second_id} =
+               ok!(client, "invoke", %{
+                 "instance" => name,
+                 "agent" => "final",
+                 "prompt" => "second"
+               })
+
+      assert eventually(fn ->
+               match?(
+                 %{"status" => "completed", "text" => ~s({"answer":2})},
+                 ok!(client, "result", %{"instance" => name, "id" => second_id})
+               )
+             end)
+
+      assert_receive {:codex_exec, "second", "thread-final", :final_message}
+      second = ok!(client, "result", %{"instance" => name, "id" => second_id})
+      assert second["session_id"] == first["session_id"]
+      assert ok!(client, "result", %{"instance" => name, "id" => second_id}) == second
+      refute_received {:codex_exec, "second", _, _}
+    end
+
     test "a client creates, inspects, invokes, and stops a model-specific route", %{
       client: client,
       name: name,

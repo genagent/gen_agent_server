@@ -319,6 +319,7 @@ defmodule GenAgentServerTest do
     assert codex_opts[:sandbox] == :workspace_write
     assert codex_opts[:approval_policy] == :never
     assert codex_opts[:ignore_user_config] == true
+    assert codex_opts[:response_text] == :all_messages
 
     File.write!(
       path,
@@ -331,6 +332,18 @@ defmodule GenAgentServerTest do
              Enum.find(inherited_agents, &(elem(&1, 0) == "codex"))
 
     refute Keyword.has_key?(inherited_opts, :ignore_user_config)
+
+    File.write!(
+      path,
+      Jason.encode!(%{profiles: [Map.put(profile, :codex_response_text, "final_message")]})
+    )
+
+    assert [{"editing", final_message_agents}] = GenAgentServer.Profiles.load!(path)
+
+    assert {"codex", _, final_message_opts} =
+             Enum.find(final_message_agents, &(elem(&1, 0) == "codex"))
+
+    assert final_message_opts[:response_text] == :final_message
 
     File.write!(
       path,
@@ -352,6 +365,15 @@ defmodule GenAgentServerTest do
 
     File.write!(
       path,
+      Jason.encode!(%{profiles: [Map.put(profile, :codex_response_text, "last_message")]})
+    )
+
+    assert_raise ArgumentError, ~r/invalid codex_response_text/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+
+    File.write!(
+      path,
       Jason.encode!(%{
         profiles: [
           %{name: "claude-only", cwd: ".", providers: ["claude"], codex_user_config: "inherit"}
@@ -360,6 +382,24 @@ defmodule GenAgentServerTest do
     )
 
     assert_raise ArgumentError, ~r/sets codex_user_config without codex/, fn ->
+      GenAgentServer.Profiles.load!(path)
+    end
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        profiles: [
+          %{
+            name: "claude-only",
+            cwd: ".",
+            providers: ["claude"],
+            codex_response_text: "final_message"
+          }
+        ]
+      })
+    )
+
+    assert_raise ArgumentError, ~r/sets codex_response_text without codex/, fn ->
       GenAgentServer.Profiles.load!(path)
     end
   end

@@ -7,7 +7,8 @@ defmodule GenAgentServer.Providers do
   default to `:read_only`, which uses `dontAsk` with only Read, Grep, and Glob
   tools. Codex defaults to a read-only sandbox with approvals disabled and the
   host user's config ignored. Callers can opt in to edit modes or config
-  inheritance.
+  inheritance. Codex response text defaults to all completed agent messages;
+  callers can instead select only the final completed message.
   """
 
   @claude_efforts [:low, :medium, :high, :xhigh, :max]
@@ -33,6 +34,7 @@ defmodule GenAgentServer.Providers do
       and `codex`).
     * `:codex_sandbox` -- `:read_only` (default) or `:workspace_write`.
     * `:codex_user_config` -- `:ignore` (default) or `:inherit`.
+    * `:codex_response_text` -- `:all_messages` (default) or `:final_message`.
     * `:claude_permission_mode` -- `:plan` (default for profiles),
       `:read_only` (default for dynamic routes), or `:accept_edits`.
     * `:model` -- model name passed to the CLI backends.
@@ -74,12 +76,15 @@ defmodule GenAgentServer.Providers do
     with {:ok, cwd} <- fetch_cwd(opts),
          {:ok, sandbox} <- choice(opts, :codex_sandbox, [:read_only, :workspace_write]),
          {:ok, user_config} <- choice(opts, :codex_user_config, [:ignore, :inherit]),
+         {:ok, response_text} <-
+           choice(opts, :codex_response_text, [:all_messages, :final_message]),
          {:ok, effort} <- effort(opts, @codex_efforts) do
       base = [
         backend: @backends["codex"],
         working_dir: cwd,
         sandbox: sandbox,
-        approval_policy: :never
+        approval_policy: :never,
+        response_text: response_text
       ]
 
       base = if user_config == :ignore, do: base ++ [ignore_user_config: true], else: base

@@ -18,7 +18,10 @@ defmodule GenAgentServer.MCP do
        edit modes are explicit per-route opt-ins. Configuration is fixed at
        creation; to change a model, create another instance.
     2. `describe_instance` returns each route's provider, model, effort, mode,
-       and cwd, and the instance's `max_in_flight` and `max_results` limits.
+       response text selection, and cwd, and the instance's `max_in_flight`
+       and `max_results` limits. Codex routes default `codex_response_text` to
+       `all_messages`; `final_message` selects only the last completed message
+       for result text while retaining text events.
        Call it after reconnecting to discover what exists.
     3. `invoke` (or `ask`) a route, then read `result`, which is repeatable
        until evicted.

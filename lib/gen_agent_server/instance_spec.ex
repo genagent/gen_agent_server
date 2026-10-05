@@ -26,7 +26,8 @@ defmodule GenAgentServer.InstanceSpec do
   Route keys: `name`, `provider`, and, per provider, `model`, `effort`, `cwd`
   (absolute; defaults to the top-level `cwd`), `claude_permission_mode`
   (`read_only`, `plan`, `accept_edits`), `codex_sandbox` (`read_only`, `workspace_write`),
-  and `codex_user_config` (`ignore`, `inherit`). `echo` takes no other keys.
+  `codex_user_config` (`ignore`, `inherit`), and `codex_response_text`
+  (`all_messages`, `final_message`). `echo` takes no other keys.
   """
 
   alias GenAgentServer.Providers
@@ -35,12 +36,13 @@ defmodule GenAgentServer.InstanceSpec do
   @provider_keys %{
     "echo" => [],
     "claude" => ~w(model effort cwd claude_permission_mode),
-    "codex" => ~w(model effort cwd codex_sandbox codex_user_config)
+    "codex" => ~w(model effort cwd codex_sandbox codex_user_config codex_response_text)
   }
   @choices [
     claude_permission_mode: [:read_only, :plan, :accept_edits],
     codex_sandbox: [:read_only, :workspace_write],
-    codex_user_config: [:ignore, :inherit]
+    codex_user_config: [:ignore, :inherit],
+    codex_response_text: [:all_messages, :final_message]
   ]
 
   @max_routes 16
@@ -222,7 +224,8 @@ defmodule GenAgentServer.InstanceSpec do
       :cwd,
       :claude_permission_mode,
       :codex_sandbox,
-      :codex_user_config
+      :codex_user_config,
+      :codex_response_text
     ])
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end

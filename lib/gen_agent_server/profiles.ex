@@ -49,7 +49,8 @@ defmodule GenAgentServer.Profiles do
       raise ArgumentError, "profile #{name} contains duplicate providers"
     end
 
-    allowed_keys = ~w(name cwd providers codex_sandbox codex_user_config claude_permission_mode)
+    allowed_keys =
+      ~w(name cwd providers codex_sandbox codex_user_config codex_response_text claude_permission_mode)
 
     unless Enum.all?(Map.keys(entry), &(&1 in allowed_keys)) do
       raise ArgumentError, "profile #{name} contains unknown fields"
@@ -57,6 +58,7 @@ defmodule GenAgentServer.Profiles do
 
     codex_sandbox = Map.get(entry, "codex_sandbox", "read_only")
     codex_user_config = Map.get(entry, "codex_user_config", "ignore")
+    codex_response_text = Map.get(entry, "codex_response_text", "all_messages")
     claude_permission = Map.get(entry, "claude_permission_mode", "plan")
 
     unless codex_sandbox in ["read_only", "workspace_write"] do
@@ -65,6 +67,10 @@ defmodule GenAgentServer.Profiles do
 
     unless codex_user_config in ["ignore", "inherit"] do
       raise ArgumentError, "profile #{name} has invalid codex_user_config"
+    end
+
+    unless codex_response_text in ["all_messages", "final_message"] do
+      raise ArgumentError, "profile #{name} has invalid codex_response_text"
     end
 
     unless claude_permission in ["plan", "accept_edits"] do
@@ -79,6 +85,10 @@ defmodule GenAgentServer.Profiles do
       raise ArgumentError, "profile #{name} sets codex_user_config without codex"
     end
 
+    if Map.has_key?(entry, "codex_response_text") and "codex" not in providers do
+      raise ArgumentError, "profile #{name} sets codex_response_text without codex"
+    end
+
     if Map.has_key?(entry, "claude_permission_mode") and "claude" not in providers do
       raise ArgumentError, "profile #{name} sets claude_permission_mode without claude"
     end
@@ -87,6 +97,7 @@ defmodule GenAgentServer.Profiles do
       cwd: cwd,
       codex_sandbox: String.to_existing_atom(codex_sandbox),
       codex_user_config: String.to_existing_atom(codex_user_config),
+      codex_response_text: String.to_existing_atom(codex_response_text),
       claude_permission_mode: String.to_existing_atom(claude_permission)
     ]
 

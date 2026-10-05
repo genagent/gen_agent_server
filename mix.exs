@@ -17,10 +17,17 @@ defmodule GenAgentServer.MixProject do
 
   defp deps do
     [
-      {:gen_agent, "~> 0.6.1 or ~> 0.7.0"},
+      # Temporary immutable source pins until the response_text adapter option is released.
+      {:gen_agent,
+       github: "genagent/gen_agent",
+       ref: "b251a1321242edea1c895f76e0a16d38c357dc53",
+       override: true},
       {:gen_agent_ensemble, "~> 0.4.0 or ~> 0.5.0 or ~> 0.6.0"},
       {:gen_agent_claude, "~> 0.2.5"},
-      {:gen_agent_codex, "~> 0.4.8"},
+      {:gen_agent_codex,
+       github: "genagent/gen_agent",
+       ref: "b251a1321242edea1c895f76e0a16d38c357dc53",
+       sparse: "integrations/codex"},
       {:jason, "~> 1.4"},
       {:quantum, "~> 3.5"},
       {:snodo, "~> 0.4.1"},
