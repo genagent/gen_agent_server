@@ -120,6 +120,27 @@ defmodule GenAgentServer.PeersTest do
     assert final == result(c, receipt)
   end
 
+  test "large and JSON-escaped reports reach completion through the real reply socket", c do
+    bind(c)
+
+    bodies = [
+      String.duplicate("report ", 2_000) <> "end",
+      String.duplicate("a\0\"\\\t\n", 2_600) <> "end"
+    ]
+
+    for {body, index} <- Enum.with_index(bodies) do
+      {:ok, receipt} =
+        call(c, :send, Map.put(args(c), "idempotency_key", "large-report-#{index}"))
+
+      frame = received(c.listener)
+      reply(frame, c, "completed", body)
+      assert eventually(fn -> result(c, receipt)["state"] == "completed" end)
+      final = result(c, receipt)
+      assert List.last(final["events"])["data"]["text"] == body
+      assert final == result(c, receipt)
+    end
+  end
+
   test "duplicate keys do not send twice and conflicts preserve original task", c do
     bind(c)
     {:ok, first} = call(c, :send, args(c))
@@ -193,8 +214,10 @@ defmodule GenAgentServer.PeersTest do
 
   test "a failed write-ahead ledger prevents delivery", c do
     store = Path.join(c.root, "ledger.json")
-    {:ok, server} = Peers.start_link(Keyword.put(c.opts, :store, store))
-    on_exit(fn -> if Process.alive?(server), do: GenServer.stop(server) end)
+
+    server =
+      start_supervised!({Peers, Keyword.put(c.opts, :store, store)}, id: :failed_write_ahead)
+
     d = %{c | server: server}
     bind(d)
     File.rm!(store)
