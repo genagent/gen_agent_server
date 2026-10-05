@@ -288,18 +288,19 @@ The release's `rpc` command remains available for direct Elixir calls.
 ## MCP (stdio)
 
 `GenAgentServer.MCP` serves a local stdio MCP server for Claude, Codex, or any
-MCP client. It exposes thirteen tools, each backed by the operation of the same name
+MCP client. It exposes seventeen tools, each backed by the operation of the same name
 in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `result`,
 and `ask`, plus the lifecycle tools `create_instance`, `describe_instance`, and
 `stop_instance`, and the anonymous public GitHub read tools `public_revision`,
-`public_file`, `public_issues`, and `public_issue`. Nothing else is reachable, including `run_pattern`, jobs, and
+`public_file`, `public_issues`, and `public_issue`, plus the opt-in external-peer tools
+`discover_peers`, `bind_peer`, `send_peer_message`, `peer_result`. Nothing else is reachable, including `run_pattern`, jobs, and
 arbitrary pattern specs. `invoke` and `ask` record telemetry source `:mcp`.
 On connection the server advertises brief usage instructions that point to
-`gen-agent://guide/index`. The index links to four curated Markdown resources:
+`gen-agent://guide/index`. The index links to focused Markdown resources:
 `quickstart` for creating routes and choosing models, `invocations` for
 `ask` versus `invoke`/`result`, `scope` for connection and instance lifetime,
 `capabilities` for the exact MCP boundary, and `public-source` for current
-SHA-pinned public source and issue context. These resources are packaged in
+SHA-pinned public source and issue context, and `peers` for existing-session messaging. These resources are packaged in
 the release and are read-only guidance; they do not activate skills or grant
 access to any additional operation.
 
@@ -475,8 +476,38 @@ that run's configuration. The MCP process inherits the server environment;
 set `GEN_AGENT_SERVER_PROVIDERS`, `GEN_AGENT_SERVER_CWD`, or
 `GEN_AGENT_SERVER_CONFIG` for the projects and routes you want it to host.
 
-A session-to-session mailbox, HTTP transport, and broader control operations
-are follow-on work, as is a dashboard.
+### Existing Claude Desktop Code peers (experimental)
+
+Set `GEN_AGENT_SERVER_PEERS=true` to enable the four peer tools. This initially
+supports native protocol 1 on macOS with Claude Code 2.1.286 and 2.1.288;
+unobserved versions are rejected. The wire framing is experimental. Discovery
+reads `~/.claude/sessions` (operator override: `GEN_AGENT_SERVER_CLAUDE_HOME`).
+The server verifies native identity, process generation and owned socket before
+binding and every delivery, and never starts, resumes or stops the external session.
+
+1. `discover_peers` with `{"name":"some-session"}`.
+2. `bind_peer` with `{"address":"claude://some-session","session_id":"<discovered ID>"}`.
+3. `send_peer_message` with the address, a bounded `message` and a stable
+   task `idempotency_key`. Save the returned random `id`.
+4. `peer_result` with that `id`. Native SendMessage replies return to the server's
+   private inbox; the recipient needs no bridge MCP install or scheduled poll.
+
+A successful socket write is `queued`, with execution `unknown`. Explicit native
+acknowledged/running/completed/blocked/failed replies are correlated peer reports.
+They do not verify work quality. Repeating the same key/payload never sends again;
+changed payloads conflict. Missing reply, timeout or uncertain delivery requires
+reconciliation using that original key/ID, with no automatic new-key retry.
+
+By default the ledger is volatile. Set `GEN_AGENT_SERVER_PEER_STORE` to an absolute
+private JSON path for atomic owner-only persistence; each server needs its own file.
+The store contains task/reply text. Completed replies survive restart; outstanding
+requests become `delivery_uncertain` when the old reply channel ends, and are never
+replayed. Bind explicitly to refresh the same native ID after process restart.
+Bounds and operating details are in `gen-agent://guide/peers`.
+
+The caller checks pending results during its delegation turn. Idle Codex Desktop
+wakeup, a general Codex peer adapter, shared HTTP transport, retention/eviction,
+scheduling controls, and a dashboard remain follow-on work.
 
 The [dogfooding log](docs/dogfooding.md) records bounded real tasks, observed
 issues, and the planned progression through Ensemble patterns.

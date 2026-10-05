@@ -50,7 +50,10 @@ defmodule GenAgentServer.Application do
             restart: :permanent
           )
         end) ++
-        [{GenAgentServer.Dispatch, jobs}] ++
+        [
+          {GenAgentServer.Dispatch, jobs},
+          {GenAgentServer.Peers, Application.get_env(:gen_agent_server, :peers, [])}
+        ] ++
         if(jobs == [], do: [], else: [GenAgentServer.Scheduler])
 
     Supervisor.start_link(children,

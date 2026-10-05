@@ -13,7 +13,7 @@ try do
   {:ok, resources} = Snodo.Client.list_resources(client)
 
   guide_uris =
-    ~w(gen-agent://guide/capabilities gen-agent://guide/index gen-agent://guide/invocations gen-agent://guide/public-source gen-agent://guide/quickstart gen-agent://guide/scope)
+    ~w(gen-agent://guide/capabilities gen-agent://guide/index gen-agent://guide/invocations gen-agent://guide/peers gen-agent://guide/public-source gen-agent://guide/quickstart gen-agent://guide/scope)
 
   unless resources |> Enum.map(& &1["uri"]) |> Enum.sort() == guide_uris,
     do: raise("MCP guide catalogue is incomplete")
@@ -51,7 +51,7 @@ try do
   names = Enum.map(tools, & &1["name"]) |> Enum.sort()
 
   expected =
-    ~w(agents ask create_instance describe_instance instances invoke public_file public_issue public_issues public_revision result status stop_instance)
+    ~w(agents ask bind_peer create_instance describe_instance discover_peers instances invoke peer_result public_file public_issue public_issues public_revision result send_peer_message status stop_instance)
 
   unless names == expected, do: raise("wrong MCP catalogue: #{inspect(names)}")
 
@@ -95,6 +95,11 @@ try do
   end
 
   text = fn result -> result["content"] |> Enum.map_join(" ", & &1["text"]) end
+
+  peer_disabled = call.("discover_peers", %{})
+
+  unless peer_disabled["isError"] == true and text.(peer_disabled) =~ "peers_disabled",
+    do: raise("peer opt-in boundary failed: #{inspect(peer_disabled)}")
 
   config = %{
     "max_in_flight" => 3,

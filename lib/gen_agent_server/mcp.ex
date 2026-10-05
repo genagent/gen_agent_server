@@ -6,6 +6,8 @@ defmodule GenAgentServer.MCP do
   `result`, `ask`, and the lifecycle tools `create_instance`,
   `describe_instance`, and `stop_instance`, plus read-only public GitHub
   source tools `public_revision`, `public_file`, `public_issues`, and `public_issue`.
+  Opt-in external peer tools are `discover_peers`, `bind_peer`,
+  `send_peer_message`, and `peer_result`; see `gen-agent://guide/peers`.
   Every other operation, including
   `run_pattern`, jobs, and arbitrary pattern specs, stays unreachable from MCP.
   `invoke` and `ask` record telemetry source `:mcp`.
@@ -31,6 +33,8 @@ defmodule GenAgentServer.MCP do
   Instances and results live in this process's VM only. Creation is volatile:
   closing stdin, or starting a new stdio process, loses them, and the new
   process does not reconnect to the old one's store.
+  External peer requests have an independent optional operator-configured ledger;
+  they never launch replacement provider sessions.
 
   Run it with `mix gen_agent_server.mcp` from a checkout or
   `bin/gen_agent_server eval "GenAgentServer.MCP.serve()"` from a release. The
@@ -43,7 +47,7 @@ defmodule GenAgentServer.MCP do
 
   alias GenAgentServer.Ops
 
-  @tools ~w(instances agents status invoke result ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue)
+  @tools ~w(instances agents status invoke result ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
 
   @doc "Names of the operations exposed over MCP."
   def tools, do: @tools

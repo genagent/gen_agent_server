@@ -203,6 +203,41 @@ defmodule GenAgentServer.Ops do
         end
       ),
       op(
+        "discover_peers",
+        "Discover existing Claude sessions and describe bindings. Read-only; peer support must be enabled.",
+        false,
+        [opt("name", :string, "Exact native session name (optional)")],
+        fn a -> GenAgentServer.Peers.call(:discover, a) end
+      ),
+      op(
+        "bind_peer",
+        "Bind a claude:// alias to one verified existing native session. Never launches a replacement.",
+        true,
+        [
+          req("address", :string, "Canonical provider-qualified alias"),
+          req("session_id", :string, "Discovered native session ID")
+        ],
+        fn a -> GenAgentServer.Peers.call(:bind, a) end
+      ),
+      op(
+        "send_peer_message",
+        "Send bounded work to an existing peer. Socket write is not acknowledgement; duplicate keys never resend.",
+        true,
+        [
+          req("address", :string, "Bound alias"),
+          req("message", :string, "Task text (up to 65536 bytes)"),
+          req("idempotency_key", :string, "Stable caller task key (up to 256 bytes)")
+        ],
+        fn a -> GenAgentServer.Peers.call(:send, a) end
+      ),
+      op(
+        "peer_result",
+        "Read the same correlated peer request repeatedly. Unknown execution or timeout never authorizes resending.",
+        false,
+        [req("id", :string, "Peer request ID")],
+        fn a -> GenAgentServer.Peers.call(:result, a) end
+      ),
+      op(
         "describe_instance",
         "Describe an instance: routes with provider, model, effort, access mode, and response text selection, plus limits.",
         false,

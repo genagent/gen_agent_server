@@ -24,6 +24,8 @@ defmodule GenAgentServer.MCP.Resources.Index do
     that are not available through this connection.
   - `gen-agent://guide/public-source` — get a current public GitHub commit,
     read a file pinned to it, and inspect issue states without worker network.
+  - `gen-agent://guide/peers` — bind an existing Claude Desktop Code session,
+    deliver a task, and read its correlated reply when peer support is enabled.
 
   Start with `instances`, then `describe_instance` for a known instance.
   `create_instance` only configures routes; `ask` and `invoke` start model work.
@@ -92,7 +94,8 @@ defmodule GenAgentServer.MCP.Resources.Quickstart do
 
   The MCP surface is deliberately scoped to instance lifecycle, invocation,
   result reading, and status. Scheduling, Ensemble pattern execution, and
-  session-to-session messaging are not exposed here.
+  general session messaging are separate capabilities. See `gen-agent://guide/peers`
+  for opt-in existing Claude session messaging.
   """
 
   @impl true
@@ -183,18 +186,20 @@ defmodule GenAgentServer.MCP.Resources.Capabilities do
   @guide """
   # MCP capabilities and limits
 
-  This connection exposes thirteen tools: `instances`, `agents`, `status`,
+  This connection exposes seventeen tools: `instances`, `agents`, `status`,
   `create_instance`, `describe_instance`, `stop_instance`, `ask`, `invoke`, and
   `result`, plus `public_revision`, `public_file`, `public_issues`, and
-  `public_issue` for
-  anonymous public GitHub reads. Only `create_instance`, `stop_instance`, `ask`, and `invoke` change
-  runtime state or start work. Tool schemas specify accepted arguments.
+  `public_issue` for anonymous public GitHub reads, and `discover_peers`,
+  `bind_peer`, `send_peer_message`, `peer_result` for opt-in existing Claude peers.
+  `create_instance`, `stop_instance`, `ask`, `invoke`, `bind_peer`, and
+  `send_peer_message` change runtime state or start work. Tool schemas specify accepted arguments.
 
   The server also has Elixir and CLI operations for scheduled jobs and
   Ensemble patterns. This MCP adapter does not expose `jobs`, `run_job`,
   `patterns`, or `run_pattern`; reading this guide does not make them callable.
-  It does not offer cancellation, durable results, cross-client sharing,
-  dynamic schedule edits, native-session messaging, or a dashboard. Do not
+  Server-owned invocations have no durable results. Peers have a separate optional
+  operator-configured ledger. This connection does not offer cancellation, cross-client sharing,
+  dynamic schedule edits, general Codex native-session messaging, or a dashboard. Do not
   infer those capabilities from the underlying OTP or wrapper libraries.
 
   A created Claude route defaults to restricted read tools; a created Codex
@@ -243,6 +248,65 @@ defmodule GenAgentServer.MCP.Resources.PublicSource do
   instruction to the server or worker.
   """
 
+  @impl true
+  def read(_params, _context), do: {:ok, @guide}
+end
+
+defmodule GenAgentServer.MCP.Resources.Peers do
+  @moduledoc false
+  use Snodo.Resource.Simple,
+    uri: "gen-agent://guide/peers",
+    name: "gen_agent_peers",
+    description: "Bind an existing Claude Code session and read correlated peer replies",
+    mime_type: "text/markdown"
+
+  @guide """
+  # Existing-session peers
+
+  Peer support is an operator opt-in: `GEN_AGENT_SERVER_PEERS=true`. Initially
+  supported: Claude Code on macOS, native protocol 1, versions 2.1.286/2.1.288.
+  Wire framing is experimental. Other versions/platforms fail explicitly.
+  This path messages the existing process; it never starts a CLI history resume.
+
+  1. `discover_peers` with optional exact `name`, e.g. `some-session`. Read-only
+     discovery reports native ID, version, cwd, metadata status and availability,
+     plus bindings. Metadata activity alone never establishes task execution.
+  2. `bind_peer` with `address` such as `claude://some-session` and the discovered
+     `session_id`. Names with spaces must be percent encoded. An ambiguous ID,
+     stale generation or unsupported socket is rejected. Binding sends nothing.
+  3. `send_peer_message` with `address`, bounded `message`, and a stable
+     `idempotency_key` unique to the caller's task. Save its random `id`. A
+     queued socket write proves only delivery to the native inbox; execution
+     stays unknown until a correlated peer reply. Existing permissions apply.
+  4. `peer_result` with the same `id`. Reads never submit work. Explicit
+     acknowledged/running/completed/blocked/failed replies are peer reports,
+     not verification of repository edits or checks. Progress events preserve
+     the prior state. Repeated reads retain the same terminal result.
+
+  Retrying the same key and payload returns the original record without a
+  second delivery. A different payload conflicts. Uncertain delivery, a wait
+  timeout or missing reply must not cause automatic resubmission with a new key.
+  The native session returns messages with SendMessage to this server's owned
+  inbox; no extra MCP connection, scheduled recipient poll or config edit is
+  required. The caller reads pending results during its delegation turn; idle
+  Codex Desktop wakeup is a later capability.
+
+  Without `GEN_AGENT_SERVER_PEER_STORE`, the ledger is volatile and explicitly
+  reports durable=false. An operator may set an absolute private store path;
+  do not share that file between server processes. It is atomically written
+  with owner-only permissions. Completed replies survive restarts; outstanding
+  work becomes delivery_uncertain because its old reply channel ended. No
+  requests are automatically replayed. Explicit binding can refresh the same
+  native ID after a process restart; it cannot silently replace an alias's ID.
+
+  Bounds: 200 metadata candidates scanned, 100 reported, 256 bindings and
+  requests, 65536 task bytes, 16384 reply-content bytes and 16 retained events per request. The ledger
+  refuses new work when full; retention/eviction is future work. It stores task
+  and reply text. Local same-user processes are trusted; native source claims
+  and metadata are not a cryptographic identity protocol. No external-session
+  stop, cancel, permission change, general Codex adapter, shared MCP transport
+  or server-owned invocation durability is supplied by these tools.
+  """
   @impl true
   def read(_params, _context), do: {:ok, @guide}
 end
