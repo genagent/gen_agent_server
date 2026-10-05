@@ -270,10 +270,16 @@ defmodule GenAgentServer.MCP.Resources.Peers do
 
   1. `discover_peers` with optional exact `name`, e.g. `some-session`. Read-only
      discovery reports native ID, version, cwd, metadata status and availability,
-     plus bindings. Metadata activity alone never establishes task execution.
+     plus bindings. Each binding refreshes `binding_status` (`verified`/`stale`),
+     `availability` (`available`/`unavailable`) and `reason` (null when available).
+     Metadata activity alone never establishes task execution.
   2. `bind_peer` with `address` such as `claude://some-session` and the discovered
      `session_id`. Names with spaces must be percent encoded. An ambiguous ID,
-     stale generation or unsupported socket is rejected. Binding sends nothing.
+     stale generation or unsupported socket is rejected. Selection uses live
+     verified claims: one live claim wins even with stale artifacts; two live
+     claims for the same ID return `ambiguous_peer`. With no live claims, a
+     single candidate retains its verification error; multiple candidates
+     return `peer_unavailable`. Binding sends nothing.
   3. `send_peer_message` with `address`, bounded `message`, and a stable
      `idempotency_key` unique to the caller's task. Save its random `id`. A
      queued socket write proves only delivery to the native inbox; execution
@@ -282,6 +288,20 @@ defmodule GenAgentServer.MCP.Resources.Peers do
      acknowledged/running/completed/blocked/failed replies are peer reports,
      not verification of repository edits or checks. Progress events preserve
      the prior state. Repeated reads retain the same terminal result.
+
+  `reply_channel` describes the request's current reply path: `active` means
+  the running server owns it; `lost` means a pending request's original channel
+  ended at restart; `unavailable` means the running server lost its listener;
+  `settled` means a completed/blocked/failed report needs no further replies.
+  `unknown` is the fallback for a record without channel evidence. Terminal
+  records always report `settled`, including older records loaded after a
+  restart, and remain repeatable even if the current listener fails. An active
+  channel does not prove execution. Acceptor crashes retry with a bounded
+  100–1000 ms backoff while the listener survives; ledger reads remain available.
+  A lost listener rejects new sends with `peer_inbox_unavailable` before
+  delivery. This differs from `peer_unavailable`, which means no candidate
+  could be verified when binding; inspect discovery/binding `reason` and
+  refresh the same native ID explicitly when its live generation is available.
 
   Retrying the same key and payload returns the original record without a
   second delivery. A different payload conflicts. Uncertain delivery, a wait

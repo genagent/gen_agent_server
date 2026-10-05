@@ -1,5 +1,12 @@
 # Control patterns seen in server dogfooding
 
+The [peer #104 fork](runs/2026-10-05-peer-104/README.md) separated a bounded
+server fix from the parent session's adapter issue using a current-main clone.
+No server worker or paid provider call ran. Its regression-first host checks
+kept source failures, a later fixture teardown race, packaging and CI evidence
+separate. Keep explicit issue ownership and checkout boundaries when a fork
+is used for capacity; inherited conversation context alone is insufficient.
+
 The [core #118 control run](runs/2026-10-02-core-118-control/README.md) used
 server v0.2.0's nine-tool stdio MCP surface and quickstart resource, but each
 ad hoc client script started its own VM. The next useful control step is one

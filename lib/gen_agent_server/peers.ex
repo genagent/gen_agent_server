@@ -14,6 +14,8 @@ defmodule GenAgentServer.Peers do
   @max_entries 256
   @max_events 16
   @max_frame_bytes 131_072
+  @acceptor_backoff 100
+  @max_acceptor_backoff 1_000
 
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -72,6 +74,8 @@ defmodule GenAgentServer.Peers do
            path: path,
            socket: socket,
            acceptor: acceptor,
+           acceptor_retry: nil,
+           acceptor_backoff: @acceptor_backoff,
            store: Keyword.get(opts, :store),
            data: data
          }}
@@ -159,14 +163,33 @@ defmodule GenAgentServer.Peers do
   @impl true
   def handle_info({:EXIT, pid, _reason}, %{acceptor: pid} = state) do
     if Port.info(state.socket) do
-      owner = self()
-      acceptor = spawn_link(fn -> accept(state.socket, owner) end)
-      {:noreply, %{state | acceptor: acceptor}}
+      retry = Process.send_after(self(), :restart_acceptor, state.acceptor_backoff)
+
+      {:noreply,
+       %{
+         state
+         | acceptor: nil,
+           acceptor_retry: retry,
+           acceptor_backoff: min(state.acceptor_backoff * 2, @max_acceptor_backoff)
+       }}
     else
       # Preserve the ledger if the reply listener is lost. New sends fail before delivery.
       {:noreply, Map.put(state, :inbox_failed, true)}
     end
   end
+
+  def handle_info(:restart_acceptor, %{enabled: true, acceptor: nil} = state) do
+    if Port.info(state.socket) do
+      owner = self()
+      acceptor = spawn_link(fn -> accept(state.socket, owner) end)
+      {:noreply, %{state | acceptor: acceptor, acceptor_retry: nil}}
+    else
+      {:noreply, Map.put(%{state | acceptor_retry: nil}, :inbox_failed, true)}
+    end
+  end
+
+  def handle_info({:accepted, pid}, %{acceptor: pid} = state),
+    do: {:noreply, %{state | acceptor_backoff: @acceptor_backoff}}
 
   def handle_info({:frame, frame}, state) do
     case reply(frame, state) do
@@ -190,7 +213,8 @@ defmodule GenAgentServer.Peers do
   @impl true
   def terminate(_, %{enabled: true} = state) do
     :gen_tcp.close(state.socket)
-    Process.exit(state.acceptor, :shutdown)
+    if is_pid(state.acceptor), do: Process.exit(state.acceptor, :shutdown)
+    if state.acceptor_retry, do: Process.cancel_timer(state.acceptor_retry)
     File.rm(state.path)
     File.rmdir(state.dir)
   end
@@ -315,10 +339,11 @@ defmodule GenAgentServer.Peers do
     |> Map.put("durable", state.store != nil and not Map.get(state, :store_failed, false))
     |> Map.put(
       "reply_channel",
-      if(Map.get(state, :inbox_failed, false),
-        do: "unavailable",
-        else: request["reply_channel"] || "unknown"
-      )
+      cond do
+        request["state"] in @terminal -> "settled"
+        Map.get(state, :inbox_failed, false) -> "unavailable"
+        true -> request["reply_channel"] || "unknown"
+      end
     )
   end
 
@@ -343,16 +368,18 @@ defmodule GenAgentServer.Peers do
 
   defp select_peer(id, state) do
     candidates =
-      Enum.filter(state.adapter.discover(state.adapter_opts), &(&1["session_id"] == id))
+      state.adapter.discover(state.adapter_opts)
+      |> Enum.filter(&(&1["session_id"] == id))
+      |> Enum.map(fn peer -> {peer, state.adapter.verify(peer, state.adapter_opts)} end)
 
-    case Enum.filter(candidates, &(state.adapter.verify(&1, state.adapter_opts) == :ok)) do
-      [peer] ->
+    case Enum.filter(candidates, fn {_peer, verification} -> verification == :ok end) do
+      [{peer, :ok}] ->
         {:ok, peer}
 
       [] ->
         case candidates do
           [] -> {:error, :peer_not_found}
-          [peer] -> state.adapter.verify(peer, state.adapter_opts)
+          [{_peer, verification}] -> verification
           _ -> {:error, :peer_unavailable}
         end
 
@@ -516,6 +543,8 @@ defmodule GenAgentServer.Peers do
   defp accept(listener, owner) do
     case :gen_tcp.accept(listener) do
       {:ok, socket} ->
+        send(owner, {:accepted, self()})
+
         case :gen_tcp.recv(socket, 0, 1_000) do
           {:ok, line} ->
             case Jason.decode(line) do

@@ -141,6 +141,22 @@ defmodule GenAgentServer.PeersTest do
     end
   end
 
+  test "a rejected candidate retains its verification error even if the process recovers", c do
+    counter = start_supervised!({Agent, fn -> 0 end})
+
+    verify = fn _peer ->
+      check = Agent.get_and_update(counter, fn count -> {count + 1, count + 1} end)
+      if check == 2, do: {:error, :stale_peer}, else: :ok
+    end
+
+    opts = Keyword.put(c.opts, :adapter_opts, verify_process: verify)
+    server = start_supervised!({Peers, opts}, id: :changing_verification)
+
+    assert {:error, :stale_peer} = bind(%{c | server: server})
+    # Discovery verifies once; selection verifies once and keeps that result.
+    assert Agent.get(counter, & &1) == 2
+  end
+
   test "duplicate keys do not send twice and conflicts preserve original task", c do
     bind(c)
     {:ok, first} = call(c, :send, args(c))
@@ -187,7 +203,10 @@ defmodule GenAgentServer.PeersTest do
 
   test "durable restart preserves completed results and never resends uncertain requests", c do
     store = Path.join(c.root, "ledger.json")
-    {:ok, first_server} = Peers.start_link(Keyword.put(c.opts, :store, store))
+
+    first_server =
+      start_supervised!({Peers, Keyword.put(c.opts, :store, store)}, id: :durable_first)
+
     d = %{c | server: first_server}
     bind(d)
     {:ok, first} = call(d, :send, args(d))
@@ -197,9 +216,12 @@ defmodule GenAgentServer.PeersTest do
     {:ok, pending} = call(d, :send, Map.put(args(d), "idempotency_key", "pending"))
     received(d.listener)
     final = result(d, first)
-    GenServer.stop(first_server)
-    {:ok, restarted} = Peers.start_link(Keyword.put(c.opts, :store, store))
-    on_exit(fn -> if Process.alive?(restarted), do: GenServer.stop(restarted) end)
+    assert final["reply_channel"] == "settled"
+    :ok = stop_supervised(:durable_first)
+
+    restarted =
+      start_supervised!({Peers, Keyword.put(c.opts, :store, store)}, id: :durable_restarted)
+
     d = %{d | server: restarted}
     assert final == result(d, first)
     assert result(d, pending)["state"] == "delivery_uncertain"
@@ -275,9 +297,86 @@ defmodule GenAgentServer.PeersTest do
     frame = received(c.listener)
     previous = :sys.get_state(c.server).acceptor
     Process.exit(previous, :kill)
-    assert eventually(fn -> :sys.get_state(c.server).acceptor != previous end)
+
+    assert eventually(fn ->
+             acceptor = :sys.get_state(c.server).acceptor
+             is_pid(acceptor) and acceptor != previous
+           end)
+
     reply(frame, c, "completed", "recovered")
     assert eventually(fn -> result(c, receipt)["state"] == "completed" end)
+  end
+
+  test "repeated acceptor exits back off, stay bounded and reset after an accepted reply", c do
+    bind(c)
+    {:ok, receipt} = call(c, :send, args(c))
+    frame = received(c.listener)
+
+    for delay <- [100, 200, 400, 800, 1_000, 1_000] do
+      previous = :sys.get_state(c.server).acceptor
+      Process.exit(previous, :kill)
+      assert eventually(fn -> :sys.get_state(c.server).acceptor == nil end)
+      state = :sys.get_state(c.server)
+      assert remaining = Process.read_timer(state.acceptor_retry)
+      assert remaining > 0 and remaining <= delay
+      assert state.acceptor_backoff == min(delay * 2, 1_000)
+      # Ledger reads remain responsive while recovery is delayed.
+      assert result(c, receipt)["state"] == "queued"
+      assert eventually(fn -> is_pid(:sys.get_state(c.server).acceptor) end, 100)
+    end
+
+    reply(frame, c, "completed", "recovered after repeated exits")
+    assert eventually(fn -> result(c, receipt)["state"] == "completed" end)
+    assert :sys.get_state(c.server).acceptor_backoff == 100
+  end
+
+  test "terminal channels settle while listener loss marks only pending work unavailable", c do
+    bind(c)
+
+    finals =
+      for kind <- ~w(completed blocked failed) do
+        {:ok, receipt} = call(c, :send, Map.put(args(c), "idempotency_key", kind))
+        frame = received(c.listener)
+        assert receipt["reply_channel"] == "active"
+        reply(frame, c, kind, kind)
+        assert eventually(fn -> result(c, receipt)["state"] == kind end)
+        final = result(c, receipt)
+        assert final["reply_channel"] == "settled"
+        {receipt, final}
+      end
+
+    {:ok, pending} = call(c, :send, Map.put(args(c), "idempotency_key", "pending"))
+    received(c.listener)
+    :gen_tcp.close(:sys.get_state(c.server).socket)
+    assert eventually(fn -> result(c, pending)["reply_channel"] == "unavailable" end)
+
+    assert {:error, :peer_inbox_unavailable} =
+             call(c, :send, Map.put(args(c), "idempotency_key", "no-inbox"))
+
+    for {receipt, final} <- finals, do: assert(final == result(c, receipt))
+  end
+
+  test "shutdown during backoff cancels recovery and removes the private inbox", c do
+    server = start_supervised!({Peers, c.opts}, id: :shutdown_during_backoff)
+    path = :sys.get_state(server).path
+    Process.exit(:sys.get_state(server).acceptor, :kill)
+    assert eventually(fn -> :sys.get_state(server).acceptor == nil end)
+    retry = :sys.get_state(server).acceptor_retry
+
+    assert :ok = stop_supervised(:shutdown_during_backoff)
+    refute Process.alive?(server)
+    refute Process.read_timer(retry)
+    refute File.exists?(path)
+  end
+
+  test "listener loss during backoff fails closed instead of respawning", c do
+    Process.exit(:sys.get_state(c.server).acceptor, :kill)
+    assert eventually(fn -> :sys.get_state(c.server).acceptor == nil end)
+    :gen_tcp.close(:sys.get_state(c.server).socket)
+    assert eventually(fn -> Map.get(:sys.get_state(c.server), :inbox_failed, false) end)
+    assert :sys.get_state(c.server).acceptor == nil
+    assert :sys.get_state(c.server).acceptor_retry == nil
+    assert {:error, :peer_inbox_unavailable} = call(c, :send, args(c))
   end
 
   test "bounded events retain write evidence and recent progress, and permit empty completion",
