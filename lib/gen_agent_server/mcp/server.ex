@@ -13,6 +13,7 @@ defmodule GenAgentServer.MCP.Server do
         "Use instances and describe_instance to inspect state; create_instance to select " <>
         "providers, models, and project directories; invoke then result for long turns. " <>
         "Use public_revision, public_file, public_issues, and public_issue for current public GitHub context. " <>
+        "Read gen-agent://guide/peers for opt-in existing-session discover/bind/send/result operations. " <>
         "Instances and results belong to this MCP process and disappear when it exits.",
     protocols: [
       Snodo.Protocol.V2026_07_28,
@@ -33,6 +34,10 @@ defmodule GenAgentServer.MCP.Server do
   tool(GenAgentServer.MCP.Tools.PublicFile)
   tool(GenAgentServer.MCP.Tools.PublicIssues)
   tool(GenAgentServer.MCP.Tools.PublicIssue)
+  tool(GenAgentServer.MCP.Tools.DiscoverPeers)
+  tool(GenAgentServer.MCP.Tools.BindPeer)
+  tool(GenAgentServer.MCP.Tools.SendPeerMessage)
+  tool(GenAgentServer.MCP.Tools.PeerResult)
 
   resource(GenAgentServer.MCP.Resources.Index)
   resource(GenAgentServer.MCP.Resources.Quickstart)
@@ -40,4 +45,5 @@ defmodule GenAgentServer.MCP.Server do
   resource(GenAgentServer.MCP.Resources.Scope)
   resource(GenAgentServer.MCP.Resources.Capabilities)
   resource(GenAgentServer.MCP.Resources.PublicSource)
+  resource(GenAgentServer.MCP.Resources.Peers)
 end

@@ -6,7 +6,11 @@ defmodule GenAgentServer.MCPTest do
   @legacy_tool_names ~w(agents ask instances invoke result status)
   @lifecycle_tool_names ~w(create_instance describe_instance stop_instance)
   @source_tool_names ~w(public_file public_issue public_issues public_revision)
-  @tool_names Enum.sort(@legacy_tool_names ++ @lifecycle_tool_names ++ @source_tool_names)
+  @peer_tool_names ~w(discover_peers bind_peer send_peer_message peer_result)
+  @tool_names Enum.sort(
+                @legacy_tool_names ++
+                  @lifecycle_tool_names ++ @source_tool_names ++ @peer_tool_names
+              )
 
   setup do
     {:ok, client} = Snodo.Client.direct(MCP.Server.runtime())
@@ -17,6 +21,7 @@ defmodule GenAgentServer.MCPTest do
     gen-agent://guide/capabilities
     gen-agent://guide/index
     gen-agent://guide/invocations
+    gen-agent://guide/peers
     gen-agent://guide/public-source
     gen-agent://guide/quickstart
     gen-agent://guide/scope

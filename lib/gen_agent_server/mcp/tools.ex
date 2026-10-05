@@ -5,6 +5,60 @@ defmodule GenAgentServer.MCP.Tools do
   # names its operation literally; the schemas are checked against
   # GenAgentServer.Ops.json_schema/1 in the test suite.
 
+  defmodule DiscoverPeers do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "discover_peers",
+      description:
+        "Discover existing Claude sessions and describe bindings. Read-only; peer support must be enabled."
+
+    input_schema(
+      GenAgentServer.Ops.json_schema(elem(GenAgentServer.Ops.fetch("discover_peers"), 1))
+    )
+
+    @impl true
+    def call(args, _context), do: GenAgentServer.MCP.run("discover_peers", args)
+  end
+
+  defmodule BindPeer do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "bind_peer",
+      description:
+        "Bind a claude:// alias to one verified existing native session. Never launches a replacement."
+
+    input_schema(GenAgentServer.Ops.json_schema(elem(GenAgentServer.Ops.fetch("bind_peer"), 1)))
+    @impl true
+    def call(args, _context), do: GenAgentServer.MCP.run("bind_peer", args)
+  end
+
+  defmodule SendPeerMessage do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "send_peer_message",
+      description:
+        "Send bounded work to an existing peer. Socket write is not acknowledgement; duplicate keys never resend."
+
+    input_schema(
+      GenAgentServer.Ops.json_schema(elem(GenAgentServer.Ops.fetch("send_peer_message"), 1))
+    )
+
+    @impl true
+    def call(args, _context), do: GenAgentServer.MCP.run("send_peer_message", args)
+  end
+
+  defmodule PeerResult do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "peer_result",
+      description:
+        "Read the same correlated peer request repeatedly. Unknown execution or timeout never authorizes resending."
+
+    input_schema(GenAgentServer.Ops.json_schema(elem(GenAgentServer.Ops.fetch("peer_result"), 1)))
+    @impl true
+    def call(args, _context), do: GenAgentServer.MCP.run("peer_result", args)
+  end
+
   defmodule Instances do
     @moduledoc false
     use Snodo.Tool, name: "instances", description: "List running instances."
