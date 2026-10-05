@@ -55,9 +55,11 @@ defmodule GenAgentServer.PatternSpec do
 
   @doc """
   Parse `spec`. `opts` supplies defaults for agent entries: `:cwd`,
-  `:codex_sandbox`, `:codex_user_config`, `:claude_permission_mode`. The spec keys `"cwd"`,
+  `:codex_sandbox`, `:codex_user_config`, `:codex_response_text`,
+  `:claude_permission_mode`. The spec keys `"cwd"`,
   `"codex_sandbox"` (`"read_only"` or `"workspace_write"`),
-  `"codex_user_config"` (`"ignore"` or `"inherit"`), and
+  `"codex_user_config"` (`"ignore"` or `"inherit"`),
+  `"codex_response_text"` (`"all_messages"` or `"final_message"`), and
   `"claude_permission_mode"` (`"plan"` or `"accept_edits"`) override them.
   Both CLI providers are read-only unless a spec opts in.
   """
@@ -71,7 +73,7 @@ defmodule GenAgentServer.PatternSpec do
         _ -> opts
       end
 
-    with {:ok, opts} <- edit_modes(spec, opts),
+    with {:ok, opts} <- provider_options(spec, opts),
          {:ok, strategy_opts, routes} <- build(pattern, spec, opts) do
       {:ok,
        %{
@@ -143,8 +145,8 @@ defmodule GenAgentServer.PatternSpec do
     end
   end
 
-  # Provider modes are limited to the choices profiles allow.
-  defp edit_modes(spec, opts) do
+  # Provider options are limited to the choices profiles allow.
+  defp provider_options(spec, opts) do
     with {:ok, opts} <-
            edit_mode(spec, opts, "codex_sandbox", %{
              "read_only" => :read_only,
@@ -154,6 +156,11 @@ defmodule GenAgentServer.PatternSpec do
            edit_mode(spec, opts, "codex_user_config", %{
              "ignore" => :ignore,
              "inherit" => :inherit
+           }),
+         {:ok, opts} <-
+           edit_mode(spec, opts, "codex_response_text", %{
+             "all_messages" => :all_messages,
+             "final_message" => :final_message
            }) do
       edit_mode(spec, opts, "claude_permission_mode", %{
         "plan" => :plan,
@@ -214,7 +221,13 @@ defmodule GenAgentServer.PatternSpec do
 
     provider_opts =
       opts
-      |> Keyword.take([:cwd, :codex_sandbox, :codex_user_config, :claude_permission_mode])
+      |> Keyword.take([
+        :cwd,
+        :codex_sandbox,
+        :codex_user_config,
+        :codex_response_text,
+        :claude_permission_mode
+      ])
       |> put_model(entry)
 
     cond do

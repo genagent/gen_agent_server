@@ -100,6 +100,19 @@ settings available to the CLI. The installed Codex CLI still handles its own
 authentication; this setting does not provide credentials. Pattern specs also
 accept `"codex_user_config"` with the same choices.
 
+`"codex_response_text"` accepts `"all_messages"` (the default) or
+`"final_message"`. The default joins every completed Codex agent message with
+a blank line, preserving existing behavior. `"final_message"` makes the
+completed result text only the last agent message, which is useful when Codex
+emits commentary before a final structured answer. Text events are still
+preserved. Static profiles and pattern specs accept the same choices.
+
+Until this adapter option is released, this server pins the core and Codex
+integration to immutable source revision
+`b251a1321242edea1c895f76e0a16d38c357dc53` in `mix.exs` and `mix.lock`.
+No published adapter version provides this option yet; replacing the source
+pin requires a release that includes it.
+
 ## Optional scheduled turns
 
 The same JSON file may define Quantum jobs. No jobs run unless configured;
@@ -295,15 +308,17 @@ and pick each route's provider and model:
        "max_results": 50,
        "routes": [
          {"name": "plan", "provider": "claude", "model": "opus", "effort": "high"},
-         {"name": "review", "provider": "codex", "model": "gpt-5-codex", "effort": "medium"},
+         {"name": "review", "provider": "codex", "model": "gpt-5-codex", "effort": "medium",
+          "codex_response_text": "final_message"},
          {"name": "smoke", "provider": "echo"}
        ]
      }
    }
    ```
 
-2. `describe_instance` returns each route's provider, model, effort, cwd, and
-   access mode, plus `max_in_flight` and `max_results`. Each route object uses
+2. `describe_instance` returns each route's provider, model, effort, cwd,
+   access mode, and response-text selection, plus `max_in_flight` and
+   `max_results`. Each route object uses
    the same keys as the creation input. Instances not created this way (the
    default instance) report `configured: false` and route names only.
 3. `invoke` or `ask` with `instance` set to the created instance name and
@@ -316,7 +331,11 @@ Route keys are `name`, `provider` (`echo`, `claude`, `codex`), `model`,
 `effort`, `cwd`, and the access options `claude_permission_mode` (`read_only` by
 default for dynamic routes, `plan`, or `accept_edits`), `codex_sandbox` (`read_only` by default, or
 `workspace_write`), and `codex_user_config` (`ignore` by default, or `inherit`).
-Edit modes and config inheritance are explicit per-route opt-ins. `effort` is
+Codex routes also accept `codex_response_text` (`all_messages` by default, or
+`final_message`). The default joins every completed agent message; the opt-in
+uses only the last completed agent message for the result text. Edit modes,
+config inheritance, and final-message selection are explicit per-route
+opt-ins. `effort` is
 `low`, `medium`, `high`, `xhigh`, or `max` for Claude, and `low`, `medium`, or
 `high` for Codex, where it is sent as the fixed `model_reasoning_effort` config
 override on both fresh and resumed turns. `echo` accepts only `name` and

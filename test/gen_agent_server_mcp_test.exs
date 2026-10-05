@@ -77,6 +77,22 @@ defmodule GenAgentServer.MCPTest do
       op = Ops.fetch(field(tool, "name", :name)) |> elem(1)
       assert field(tool, "description", :description) == op.summary
       assert field(tool, "inputSchema", :input_schema) == Ops.json_schema(op)
+
+      if field(tool, "name", :name) == "create_instance" do
+        mode =
+          get_in(field(tool, "inputSchema", :input_schema), [
+            "properties",
+            "config",
+            "properties",
+            "routes",
+            "items",
+            "properties",
+            "codex_response_text"
+          ])
+
+        assert mode["type"] == "string"
+        assert mode["enum"] == ["all_messages", "final_message"]
+      end
     end
 
     refute Enum.any?(~w(run_pattern run_job jobs patterns), &(&1 in @tool_names))

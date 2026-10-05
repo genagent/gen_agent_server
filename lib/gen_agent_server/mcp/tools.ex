@@ -166,7 +166,7 @@ defmodule GenAgentServer.MCP.Tools do
     use Snodo.Tool,
       name: "describe_instance",
       description:
-        "Describe an instance: routes with provider, model, effort, and access mode, plus limits."
+        "Describe an instance: routes with provider, model, effort, access mode, and response text selection, plus limits."
 
     input_schema(
       "describe_instance"

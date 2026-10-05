@@ -204,7 +204,7 @@ defmodule GenAgentServer.Ops do
       ),
       op(
         "describe_instance",
-        "Describe an instance: routes with provider, model, effort, and access mode, plus limits.",
+        "Describe an instance: routes with provider, model, effort, access mode, and response text selection, plus limits.",
         false,
         [instance()],
         fn a ->
@@ -365,7 +365,13 @@ defmodule GenAgentServer.Ops do
           "enum" => ["read_only", "plan", "accept_edits"]
         },
         "codex_sandbox" => %{"type" => "string", "enum" => ["read_only", "workspace_write"]},
-        "codex_user_config" => %{"type" => "string", "enum" => ["ignore", "inherit"]}
+        "codex_user_config" => %{"type" => "string", "enum" => ["ignore", "inherit"]},
+        "codex_response_text" => %{
+          "type" => "string",
+          "enum" => ["all_messages", "final_message"],
+          "description" =>
+            "Codex result text: join all messages (default), or use only the final message."
+        }
       },
       "required" => ["name", "provider"]
     }

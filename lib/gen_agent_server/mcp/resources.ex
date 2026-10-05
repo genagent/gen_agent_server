@@ -69,6 +69,9 @@ defmodule GenAgentServer.MCP.Resources.Quickstart do
      that route. Omit `model` and `effort` for provider defaults. Use model IDs
      available to the installed CLI and account. Up to 16 routes are allowed.
      Configuration is immutable: create a new instance to change a model.
+     A Codex route may set `codex_response_text` to `final_message` when its
+     result should contain only the last completed agent message. The default,
+     `all_messages`, joins every completed agent message with a blank line.
   3. Call `invoke` with `instance`, `agent` (the route name), and `prompt`.
      Keep the returned ID and poll `result` with the same instance. Reads are
      repeatable until the bounded result store evicts them. `ask` submits and
@@ -82,8 +85,9 @@ defmodule GenAgentServer.MCP.Resources.Quickstart do
   has ignored an explicit `--model` in plan mode in live tests. Codex defaults
   to a read-only sandbox, disabled approvals, and ignored user config. A route
   may explicitly set `claude_permission_mode` to `accept_edits`, `codex_sandbox` to
-  `workspace_write`, or `codex_user_config` to `inherit`. These are provider
-  controls, not a server-enforced filesystem boundary. Review edits before
+  `workspace_write`, `codex_user_config` to `inherit`, or
+  `codex_response_text` to `final_message`. These are provider controls, not a
+  server-enforced filesystem boundary. Review edits before
   merging. `create_instance` does not itself run a model; `invoke` and `ask` do.
 
   The MCP surface is deliberately scoped to instance lifecycle, invocation,
@@ -149,8 +153,11 @@ defmodule GenAgentServer.MCP.Resources.Scope do
   The default instance is configured by server environment at startup and
   cannot be stopped. `create_instance` adds a named instance with fixed routes
   and limits. `describe_instance` reports its routes, selected model and
-  effort, project directory, access settings, and limits. To change a route,
-  stop that named instance and create another; stopping discards its results.
+  effort, project directory, access settings, and limits. Codex descriptions
+  also report `codex_response_text`: `all_messages` keeps
+  the joined text of every completed agent message, while `final_message`
+  selects only the last one. To change a route, stop that named instance and
+  create another; stopping discards its results.
   A route's model string is passed to the installed provider CLI; the server
   cannot guarantee that every CLI or account accepts it.
 

@@ -19,6 +19,15 @@ defmodule GenAgentServer.RunTest do
       refute Keyword.has_key?(opts, :cwd)
 
       assert opts[:ignore_user_config] == true
+      assert opts[:response_text] == :all_messages
+
+      assert {:ok, final_message} =
+               Providers.backend_opts("codex",
+                 cwd: File.cwd!(),
+                 codex_response_text: :final_message
+               )
+
+      assert final_message[:response_text] == :final_message
 
       assert {:ok, inherited} =
                Providers.backend_opts("codex",
@@ -43,6 +52,12 @@ defmodule GenAgentServer.RunTest do
                Providers.backend_opts("codex",
                  cwd: File.cwd!(),
                  codex_user_config: :unknown
+               )
+
+      assert {:error, {:invalid_option, :codex_response_text, :last_message}} =
+               Providers.backend_opts("codex",
+                 cwd: File.cwd!(),
+                 codex_response_text: :last_message
                )
 
       assert {:error, {:unknown_provider, "gemini"}} = Providers.backend_opts("gemini")
@@ -117,6 +132,7 @@ defmodule GenAgentServer.RunTest do
 
       assert opts[:sandbox] == :read_only
       assert opts[:ignore_user_config] == true
+      assert opts[:response_text] == :all_messages
 
       assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
                PatternSpec.parse(Map.put(codex, "codex_sandbox", "workspace_write"),
@@ -132,6 +148,13 @@ defmodule GenAgentServer.RunTest do
 
       refute Keyword.has_key?(inherited, :ignore_user_config)
 
+      assert {:ok, %{strategy_opts: [agent: {_, _, final_message}]}} =
+               PatternSpec.parse(Map.put(codex, "codex_response_text", "final_message"),
+                 cwd: File.cwd!()
+               )
+
+      assert final_message[:response_text] == :final_message
+
       assert {:error, {:invalid, "codex_user_config", "unknown"}} =
                PatternSpec.parse(Map.put(codex, "codex_user_config", "unknown"),
                  cwd: File.cwd!()
@@ -139,6 +162,11 @@ defmodule GenAgentServer.RunTest do
 
       assert {:error, {:invalid, "codex_sandbox", "danger_full_access"}} =
                PatternSpec.parse(Map.put(codex, "codex_sandbox", "danger_full_access"),
+                 cwd: File.cwd!()
+               )
+
+      assert {:error, {:invalid, "codex_response_text", "last_message"}} =
+               PatternSpec.parse(Map.put(codex, "codex_response_text", "last_message"),
                  cwd: File.cwd!()
                )
     end
