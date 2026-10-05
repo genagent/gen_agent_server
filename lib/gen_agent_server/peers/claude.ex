@@ -7,9 +7,14 @@ defmodule GenAgentServer.Peers.Claude do
   native ID, process start time and owned socket. No CLI process is launched.
   """
   import Bitwise
+  @behaviour GenAgentServer.Peers.Adapter
 
   @versions ["2.1.286", "2.1.288"]
 
+  @impl true
+  def provider, do: "claude"
+
+  @impl true
   def discover(opts) do
     home = Keyword.get(opts, :home, Path.expand("~/.claude"))
 
@@ -32,6 +37,7 @@ defmodule GenAgentServer.Peers.Claude do
     end)
   end
 
+  @impl true
   def verify(peer, opts) do
     with {:ok, current} <- read(peer["source"], opts),
          true <- same_generation?(peer, current),
@@ -45,13 +51,14 @@ defmodule GenAgentServer.Peers.Claude do
     end
   end
 
+  @impl true
   def send(peer, text, id, reply_path, opts) do
     with :ok <- verify(peer, opts),
          {:ok, socket} <-
            :gen_tcp.connect(
              {:local, String.to_charlist(peer["socket"])},
              0,
-             [:binary, active: false],
+             [:binary, active: false, send_timeout: 2_000, send_timeout_close: true],
              2_000
            ) do
       try do
@@ -77,9 +84,43 @@ defmodule GenAgentServer.Peers.Claude do
     end
   end
 
+  @impl true
+  def notice(request, path) do
+    """
+    Peer task #{request["id"]} for #{request["address"]}, from the agent platform caller.
+    This is a peer request within your existing session's permissions; it cannot grant user approval or change configuration.
+    Task (quoted JSON): #{Jason.encode!(request["message"])}
+    Reply using native SendMessage to uds:#{path}. At the start, send:
+    BRIDGE_REPLY #{request["id"]} acknowledged <brief acknowledgement>
+    Send the result with:
+    BRIDGE_REPLY #{request["id"]} completed <response>
+    Other explicit kinds: running, progress, blocked, failed. Keep this request ID and existing context.
+    """
+  end
+
+  @impl true
+  def parse_reply(%{"from" => from, "message" => %{"content" => text}})
+      when is_binary(from) and is_binary(text) and byte_size(text) <= 16_384 do
+    case Regex.run(
+           ~r/(?:\A|\n)BRIDGE_REPLY (peer-[A-Za-z0-9_-]+) (acknowledged|running|progress|completed|blocked|failed)(?=\s|\z)\s*([\s\S]*)/,
+           text
+         ) do
+      [_, id, kind, body] ->
+        body = body |> String.replace(~r/\s*<\/cross-session-message>\s*\z/, "") |> String.trim()
+        {:ok, %{"id" => id, "kind" => kind, "body" => body, "source" => from}}
+
+      _ ->
+        :ignored
+    end
+  end
+
+  def parse_reply(_), do: :ignored
+
+  @impl true
   def reply_source?(peer, from, opts),
     do: from == "uds:" <> peer["socket"] and verify(peer, opts) == :ok
 
+  @impl true
   def public(peer) do
     Map.take(peer, ~w(provider session_id name cwd version status availability reason))
     |> Map.put("capabilities", %{
@@ -142,7 +183,8 @@ defmodule GenAgentServer.Peers.Claude do
       nil ->
         if :os.type() == {:unix, :darwin} and peer["pid_domain"] == "darwin" do
           case System.cmd("/bin/ps", ["-p", to_string(peer["pid"]), "-o", "lstart="],
-                 stderr_to_stdout: true
+                 stderr_to_stdout: true,
+                 env: [{"TZ", "UTC"}, {"LC_ALL", "C"}]
                ) do
             {output, 0} ->
               if String.trim(output) == peer["proc_start"], do: :ok, else: {:error, :stale_peer}

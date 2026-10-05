@@ -140,6 +140,11 @@ defmodule GenAgentServer.PeersTest do
     bind(c)
     File.write!(c.metadata, Jason.encode!(Map.put(c.row, "procStart", "started-B")))
     assert {:error, :stale_or_unsupported_peer} = call(c, :send, args(c))
+
+    assert {:ok,
+            %{"bindings" => [%{"binding_status" => "stale", "availability" => "unavailable"}]}} =
+             call(c, :discover, %{})
+
     assert {:error, :timeout} = :gen_tcp.accept(c.listener, 20)
     File.write!(c.metadata, Jason.encode!(Map.put(c.row, "version", "2.1.999")))
     assert {:error, :stale_or_unsupported_peer} = bind(c)
@@ -177,6 +182,8 @@ defmodule GenAgentServer.PeersTest do
     d = %{d | server: restarted}
     assert final == result(d, first)
     assert result(d, pending)["state"] == "delivery_uncertain"
+    assert result(d, pending)["delivery"] == "written"
+    assert result(d, pending)["reply_channel"] == "lost"
     assert {:ok, duplicate} = call(d, :send, Map.put(args(d), "idempotency_key", "pending"))
     assert duplicate["id"] == pending["id"] and duplicate["duplicate"]
     assert {:error, :timeout} = :gen_tcp.accept(c.listener, 20)
@@ -218,8 +225,54 @@ defmodule GenAgentServer.PeersTest do
       |> Map.put("pid", 44502)
       |> Map.put("messagingSocketPath", Path.join(c.root, "44502.sock"))
 
+    {:ok, listener} =
+      :gen_tcp.listen(0, [
+        :binary,
+        active: false,
+        ifaddr: {:local, String.to_charlist(duplicate["messagingSocketPath"])}
+      ])
+
+    File.chmod!(duplicate["messagingSocketPath"], 0o600)
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
     File.write!(Path.join(c.root, "sessions/44502.json"), Jason.encode!(duplicate))
     assert {:error, :ambiguous_peer} = bind(c)
+
+    File.write!(
+      Path.join(c.root, "sessions/44502.json"),
+      Jason.encode!(Map.put(duplicate, "procStart", "started-B"))
+    )
+
+    assert {:ok, %{"binding_status" => "verified"}} = bind(c)
+  end
+
+  test "a killed acceptor recovers without losing requests", c do
+    bind(c)
+    {:ok, receipt} = call(c, :send, args(c))
+    frame = received(c.listener)
+    previous = :sys.get_state(c.server).acceptor
+    Process.exit(previous, :kill)
+    assert eventually(fn -> :sys.get_state(c.server).acceptor != previous end)
+    reply(frame, c, "completed", "recovered")
+    assert eventually(fn -> result(c, receipt)["state"] == "completed" end)
+  end
+
+  test "bounded events retain write evidence and recent progress, and permit empty completion",
+       c do
+    bind(c)
+    {:ok, receipt} = call(c, :send, args(c))
+    frame = received(c.listener)
+    for n <- 1..20, do: reply(frame, c, "progress", "progress-#{n}")
+
+    assert eventually(fn ->
+             List.last(result(c, receipt)["events"])["data"]["text"] == "progress-20"
+           end)
+
+    assert length(result(c, receipt)["events"]) == 16
+    assert hd(result(c, receipt)["events"])["kind"] == "written"
+    reply(frame, c, "completed", "")
+    assert eventually(fn -> result(c, receipt)["state"] == "completed" end)
+    assert List.last(result(c, receipt)["events"])["data"]["text"] == ""
   end
 
   test "corrupt durable bindings are rejected at startup", c do
@@ -233,6 +286,46 @@ defmodule GenAgentServer.PeersTest do
     assert {:error, _} = GenServer.start(Peers, Keyword.put(c.opts, :store, store))
     File.write!(store, "incomplete JSON")
     assert {:error, _} = GenServer.start(Peers, Keyword.put(c.opts, :store, store))
+  end
+
+  @tag :native_process
+  test "native process generation uses UTC and C locale independent of caller timezone", c do
+    if :os.type() == {:unix, :darwin} do
+      pid = System.pid() |> String.to_integer()
+
+      {started, 0} =
+        System.cmd("/bin/ps", ["-p", to_string(pid), "-o", "lstart="],
+          env: [{"TZ", "UTC"}, {"LC_ALL", "C"}]
+        )
+
+      path = Path.join(c.root, "#{pid}.sock")
+
+      {:ok, listener} =
+        :gen_tcp.listen(0, [:binary, active: false, ifaddr: {:local, String.to_charlist(path)}])
+
+      File.chmod!(path, 0o600)
+
+      row =
+        c.row
+        |> Map.put("pid", pid)
+        |> Map.put("procStart", String.trim(started))
+        |> Map.put("messagingSocketPath", path)
+
+      File.write!(Path.join(c.root, "sessions/#{pid}.json"), Jason.encode!(row))
+      uid = File.stat!(path).uid
+      opts = [home: c.root, uid: uid]
+      previous = System.get_env("TZ")
+      System.put_env("TZ", "America/Los_Angeles")
+
+      try do
+        peer = Enum.find(GenAgentServer.Peers.Claude.discover(opts), &(&1["pid"] == pid))
+        assert peer["availability"] == "available"
+        assert :ok == GenAgentServer.Peers.Claude.verify(peer, opts)
+      after
+        if previous, do: System.put_env("TZ", previous), else: System.delete_env("TZ")
+        :gen_tcp.close(listener)
+      end
+    end
   end
 
   defp call(c, op, args), do: Peers.call(op, args, c.server)

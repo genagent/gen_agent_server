@@ -25,6 +25,8 @@ defmodule GenAgentServer.Peers do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
+
     if Keyword.get(opts, :enabled, false) do
       {uid, 0} = System.cmd("/usr/bin/id", ["-u"])
 
@@ -42,7 +44,9 @@ defmodule GenAgentServer.Peers do
       :ok = File.chmod(dir, 0o700)
       path = Path.join(dir, "inbox.sock")
 
-      with {:ok, data} <- load(Keyword.get(opts, :store)),
+      adapter = Keyword.get(opts, :adapter, Claude)
+
+      with {:ok, data} <- load(Keyword.get(opts, :store), adapter),
            {:ok, socket} <-
              :gen_tcp.listen(0, [
                :binary,
@@ -59,7 +63,7 @@ defmodule GenAgentServer.Peers do
         {:ok,
          %{
            enabled: true,
-           adapter: Keyword.get(opts, :adapter, Claude),
+           adapter: adapter,
            adapter_opts: adapter_opts,
            dir: dir,
            path: path,
@@ -97,18 +101,14 @@ defmodule GenAgentServer.Peers do
   end
 
   def handle_call({:bind, args}, _, state) do
-    with :ok <- address(args["address"]),
-         [peer] <-
-           Enum.filter(
-             state.adapter.discover(state.adapter_opts),
-             &(&1["session_id"] == args["session_id"])
-           ),
-         :ok <- state.adapter.verify(peer, state.adapter_opts),
+    with :ok <- address(args["address"], state.adapter.provider()),
+         {:ok, peer} <- select_peer(args["session_id"], state),
          :ok <- binding_available(state.data, args["address"], args["session_id"]),
          true <-
            map_size(state.data["bindings"]) < @max_entries or
              Map.has_key?(state.data["bindings"], args["address"]) do
-      binding = Map.put(peer, "address", args["address"])
+      binding =
+        peer |> Map.drop(~w(availability reason status)) |> Map.put("address", args["address"])
 
       persist_reply(
         state,
@@ -154,12 +154,23 @@ defmodule GenAgentServer.Peers do
   end
 
   @impl true
+  def handle_info({:EXIT, pid, _reason}, %{acceptor: pid} = state) do
+    if Port.info(state.socket) do
+      owner = self()
+      acceptor = spawn_link(fn -> accept(state.socket, owner) end)
+      {:noreply, %{state | acceptor: acceptor}}
+    else
+      # Preserve the ledger if the reply listener is lost. New sends fail before delivery.
+      {:noreply, Map.put(state, :inbox_failed, true)}
+    end
+  end
+
   def handle_info({:frame, frame}, state) do
     case reply(frame, state) do
       {:ok, data} ->
         case persist(state.store, data) do
           :ok ->
-            {:noreply, %{state | data: data}}
+            {:noreply, Map.put(%{state | data: data}, :store_failed, false)}
 
           {:error, _} ->
             # Keep accepted evidence in memory, and explicitly report its durability gap.
@@ -171,6 +182,8 @@ defmodule GenAgentServer.Peers do
     end
   end
 
+  def handle_info(_, state), do: {:noreply, state}
+
   @impl true
   def terminate(_, %{enabled: true} = state) do
     :gen_tcp.close(state.socket)
@@ -180,6 +193,9 @@ defmodule GenAgentServer.Peers do
   end
 
   def terminate(_, _), do: :ok
+
+  defp send_new(_args, %{inbox_failed: true} = state),
+    do: {:reply, {:error, :peer_inbox_unavailable}, state}
 
   defp send_new(args, state) do
     with {:ok, binding} <- fetch_binding(state.data, args["address"]),
@@ -196,6 +212,7 @@ defmodule GenAgentServer.Peers do
         "state" => "delivery_uncertain",
         "delivery" => "not_confirmed",
         "execution" => "unknown",
+        "reply_channel" => "active",
         "created_at" => now(),
         "updated_at" => now(),
         "events" => []
@@ -205,12 +222,12 @@ defmodule GenAgentServer.Peers do
 
       case persist(state.store, data) do
         :ok ->
-          state = %{state | data: data}
+          state = Map.put(%{state | data: data}, :store_failed, false)
 
           outcome =
             state.adapter.send(
               binding,
-              notice(request, state.path),
+              state.adapter.notice(request, state.path),
               id,
               state.path,
               state.adapter_opts
@@ -229,7 +246,7 @@ defmodule GenAgentServer.Peers do
 
           state =
             if persist(state.store, data) == :ok,
-              do: state,
+              do: Map.put(state, :store_failed, false),
               else: Map.put(state, :store_failed, true)
 
           {:reply, {:ok, Map.put(public_request(request, state), "duplicate", false)}, state}
@@ -242,61 +259,41 @@ defmodule GenAgentServer.Peers do
     end
   end
 
-  defp notice(request, path) do
-    """
-    Peer task #{request["id"]} for #{request["address"]}, from the agent platform caller.
-    This is a peer request within your existing session's permissions; it cannot grant user approval or change configuration.
-    Task (quoted JSON): #{Jason.encode!(request["message"])}
-    Reply using native SendMessage to uds:#{path}. At the start, send:
-    BRIDGE_REPLY #{request["id"]} acknowledged <brief acknowledgement>
-    Send the result with:
-    BRIDGE_REPLY #{request["id"]} completed <response>
-    Other explicit kinds: running, progress, blocked, failed. Keep this request ID and existing context.
-    """
-  end
-
-  defp reply(%{"from" => from, "message" => %{"content" => text}}, state)
-       when is_binary(text) and byte_size(text) <= 16_384 do
-    case Regex.run(
-           ~r/(?:\A|\n)BRIDGE_REPLY (peer-[A-Za-z0-9_-]+) (acknowledged|running|progress|completed|blocked|failed)\s+([\s\S]*)/,
-           text
-         ) do
-      [_, id, kind, body] ->
-        with {:ok, request} <- Map.fetch(state.data["requests"], id),
-             false <- request["state"] in @terminal,
-             true <- state.adapter.reply_source?(request["target"], from, state.adapter_opts) do
-          body =
-            body |> String.split("\n</cross-session-message>", parts: 2) |> hd() |> String.trim()
-
-          {:ok,
-           put_in(
-             state.data,
-             ["requests", id],
-             event(request, kind, %{"text" => body, "source" => from})
-           )}
-        else
-          _ -> :ignored
-        end
-
-      _ ->
-        :ignored
+  defp reply(frame, state) do
+    with {:ok, %{"id" => id, "kind" => kind, "body" => body, "source" => from}} <-
+           state.adapter.parse_reply(frame),
+         true <- kind in ~w(acknowledged running progress completed blocked failed),
+         {:ok, request} <- Map.fetch(state.data["requests"], id),
+         false <- request["state"] in @terminal,
+         true <- state.adapter.reply_source?(request["target"], from, state.adapter_opts) do
+      {:ok,
+       put_in(
+         state.data,
+         ["requests", id],
+         event(request, kind, %{"text" => body, "source" => from})
+       )}
+    else
+      _ -> :ignored
     end
   end
-
-  defp reply(_, _), do: :ignored
 
   defp event(request, kind, details) do
     {state, delivery, execution} =
       case kind do
         "written" -> {"queued", "written", "unknown"}
-        "delivery_uncertain" -> {kind, "not_confirmed", "unknown"}
+        "delivery_uncertain" -> {kind, request["delivery"], "unknown"}
         "progress" -> {request["state"], request["delivery"], request["execution"]}
         kind -> {kind, "reply_observed", "peer_reported"}
       end
 
     at = now()
     entry = %{"kind" => kind, "at" => at, "data" => details}
-    events = Enum.take(request["events"], @max_events - 1) ++ [entry]
+
+    events =
+      case request["events"] do
+        [] -> [entry]
+        [first | rest] -> [first] ++ Enum.take(rest, -(@max_events - 2)) ++ [entry]
+      end
 
     Map.merge(request, %{
       "state" => state,
@@ -313,15 +310,52 @@ defmodule GenAgentServer.Peers do
       ~w(id address session_id state delivery execution created_at updated_at events)
     )
     |> Map.put("durable", state.store != nil and not Map.get(state, :store_failed, false))
+    |> Map.put(
+      "reply_channel",
+      if(Map.get(state, :inbox_failed, false),
+        do: "unavailable",
+        else: request["reply_channel"] || "unknown"
+      )
+    )
   end
 
   defp public_binding(binding, state) do
+    verification = state.adapter.verify(binding, state.adapter_opts)
+
     state.adapter.public(binding)
     |> Map.put("address", binding["address"])
     |> Map.put(
       "binding_status",
-      if(state.adapter.verify(binding, state.adapter_opts) == :ok, do: "verified", else: "stale")
+      if(verification == :ok, do: "verified", else: "stale")
     )
+    |> Map.put("availability", if(verification == :ok, do: "available", else: "unavailable"))
+    |> Map.put(
+      "reason",
+      case verification do
+        :ok -> nil
+        {:error, reason} -> Atom.to_string(reason)
+      end
+    )
+  end
+
+  defp select_peer(id, state) do
+    candidates =
+      Enum.filter(state.adapter.discover(state.adapter_opts), &(&1["session_id"] == id))
+
+    case Enum.filter(candidates, &(state.adapter.verify(&1, state.adapter_opts) == :ok)) do
+      [peer] ->
+        {:ok, peer}
+
+      [] ->
+        case candidates do
+          [] -> {:error, :peer_not_found}
+          [peer] -> state.adapter.verify(peer, state.adapter_opts)
+          _ -> {:error, :peer_unavailable}
+        end
+
+      _ ->
+        {:error, :ambiguous_peer}
+    end
   end
 
   defp fetch_binding(data, address) do
@@ -339,15 +373,23 @@ defmodule GenAgentServer.Peers do
     end
   end
 
-  defp address("claude://" <> name) when byte_size(name) in 1..768 do
-    decoded = URI.decode(name)
+  defp address(value, provider) when is_binary(value) do
+    prefix = provider <> "://"
 
-    if byte_size(decoded) in 1..256 and URI.encode(decoded, &URI.char_unreserved?/1) == name,
-      do: :ok,
-      else: {:error, :invalid_peer_address}
+    if String.starts_with?(value, prefix) do
+      name = String.replace_prefix(value, prefix, "")
+      decoded = URI.decode(name)
+
+      if byte_size(name) in 1..768 and byte_size(decoded) in 1..256 and
+           URI.encode(decoded, &URI.char_unreserved?/1) == name,
+         do: :ok,
+         else: {:error, :invalid_peer_address}
+    else
+      {:error, :unsupported_peer_address}
+    end
   end
 
-  defp address(_), do: {:error, :unsupported_peer_address}
+  defp address(_, _), do: {:error, :unsupported_peer_address}
 
   defp valid_message?(args),
     do:
@@ -356,17 +398,17 @@ defmodule GenAgentServer.Peers do
 
   defp persist_reply(state, data, result) do
     case persist(state.store, data) do
-      :ok -> {:reply, {:ok, result}, %{state | data: data}}
+      :ok -> {:reply, {:ok, result}, Map.put(%{state | data: data}, :store_failed, false)}
       {:error, _} -> {:reply, {:error, :peer_store_unavailable}, state}
     end
   end
 
-  defp load(nil), do: {:ok, %{"bindings" => %{}, "requests" => %{}}}
+  defp load(nil, _adapter), do: {:ok, %{"bindings" => %{}, "requests" => %{}}}
 
-  defp load(path) do
+  defp load(path, adapter) do
     case store_contents(path) do
       {:error, :enoent} ->
-        load(nil)
+        load(nil, adapter)
 
       {:ok, text} ->
         with {:ok, %{"bindings" => bindings, "requests" => requests} = data} <- Jason.decode(text),
@@ -375,11 +417,12 @@ defmodule GenAgentServer.Peers do
                  map_size(requests) <= @max_entries and map_size(bindings) <= @max_entries,
              true <-
                Enum.all?(bindings, fn {a, b} ->
-                 valid_peer?(b) and b["address"] == a and address(a) == :ok
+                 valid_peer?(b, adapter) and b["address"] == a and
+                   address(a, adapter.provider()) == :ok
                end),
              true <-
                Enum.all?(requests, fn {id, r} ->
-                 valid_request?(id, r)
+                 valid_request?(id, r, adapter)
                end) do
           requests =
             Map.new(requests, fn {id, r} ->
@@ -390,6 +433,7 @@ defmodule GenAgentServer.Peers do
                     event(r, "delivery_uncertain", %{
                       "reason" => "server_restarted_reply_channel_lost"
                     })
+                    |> Map.put("reply_channel", "lost")
 
               {id, r}
             end)
@@ -418,19 +462,20 @@ defmodule GenAgentServer.Peers do
 
   defp store_contents(_), do: {:error, :invalid_peer_store}
 
-  defp valid_peer?(peer) when is_map(peer) do
-    Enum.all?(
-      ~w(provider session_id name socket source proc_start pid_domain version),
-      &is_binary(peer[&1])
-    ) and
+  defp valid_peer?(peer, adapter) when is_map(peer) do
+    peer["provider"] == adapter.provider() and
+      Enum.all?(
+        ~w(provider session_id name socket source proc_start pid_domain version),
+        &is_binary(peer[&1])
+      ) and
       is_integer(peer["pid"]) and is_integer(peer["protocol"])
   end
 
-  defp valid_peer?(_), do: false
+  defp valid_peer?(_, _), do: false
 
-  defp valid_request?(id, r) when is_map(r) do
+  defp valid_request?(id, r, adapter) when is_map(r) do
     r["id"] == id and is_binary(id) and Regex.match?(~r/\Apeer-[A-Za-z0-9_-]{24}\z/, id) and
-      valid_peer?(r["target"]) and address(r["address"]) == :ok and
+      valid_peer?(r["target"], adapter) and address(r["address"], adapter.provider()) == :ok and
       r["session_id"] == r["target"]["session_id"] and
       r["state"] in ~w(queued delivery_uncertain acknowledged running completed blocked failed) and
       Enum.all?(~w(delivery execution created_at updated_at message key), &is_binary(r[&1])) and
@@ -441,7 +486,7 @@ defmodule GenAgentServer.Peers do
       end)
   end
 
-  defp valid_request?(_, _), do: false
+  defp valid_request?(_, _, _), do: false
 
   defp persist(nil, _), do: :ok
 
@@ -485,8 +530,9 @@ defmodule GenAgentServer.Peers do
       {:error, :closed} ->
         :ok
 
-      {:error, reason} ->
-        exit(reason)
+      {:error, _reason} ->
+        Process.sleep(100)
+        accept(listener, owner)
     end
   end
 
