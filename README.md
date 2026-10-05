@@ -61,6 +61,35 @@ RELEASE_NODE=gen_agent_server_dogfood \
 _build/prod/rel/gen_agent_server/bin/gen_agent_server start
 ```
 
+### Provider child environment
+
+A release leaks its boot environment (`RELEASE_*`, `BINDIR`, `ROOTDIR`, and
+release `bin`/`erts-*/bin` `PATH` entries) into every child process. Project
+tools spawned by Claude or Codex, such as a project's own `mix`, then fail
+looking for the release's `start.boot`. The server never changes its own
+environment; instead every Claude and Codex agent gets a child `:env` from
+`GenAgentServer.ChildEnv` that unsets those variables and removes only the
+exact release runtime directories from `PATH`. Credentials and other inherited
+variables pass through untouched; their inherited values are not copied into
+options or logged. This applies to
+startup agents, profiles, dynamic routes, patterns, and direct
+`start_instance/3` tuples.
+
+Operators can extend the child environment with the trusted
+`:provider_overrides` application setting, for example
+`config :gen_agent_server, provider_overrides: %{"codex" => [env: %{"PATH" =>
+"/opt/tools/bin:/usr/bin", "NO_COLOR" => "1", "TMPDIR" => false}]}`. A string
+sets a variable, `false` unsets it, and a `PATH` override replaces the
+inherited one. Cleanup runs after overrides, so release boot names stay unset
+and release directories are stripped even from an override `PATH`. No client
+operation or MCP schema accepts `env`.
+
+The backend streaming launch paths use `false` for Port unsets. This does not
+change standalone wrapper one-shot commands: ClaudeWrapper's System.cmd runner
+requires `nil` for unsets. Optional Forcola runners are not enabled or validated
+by this server. Non-CLI backends and custom raw `strategy_opts` are passed
+through unchanged; typed patterns use the provider configuration above.
+
 In another terminal, set the same node name before issuing remote commands:
 
 ```sh

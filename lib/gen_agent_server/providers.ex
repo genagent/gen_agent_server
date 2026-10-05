@@ -46,12 +46,35 @@ defmodule GenAgentServer.Providers do
   Operators and tests can set `:provider_overrides` in the `:gen_agent_server`
   application environment to a map of provider name to keyword options merged
   over the result (for example a replacement `:backend`). It is trusted
-  configuration; no operation accepts it from a client.
+  configuration; no operation accepts it from a client, and no client-facing
+  schema exposes `:env`.
+
+  ## Child environment
+
+  For the Claude and Codex CLI backends the result always carries an `:env`
+  built by `GenAgentServer.ChildEnv.normalize/2`. Priority, lowest to highest:
+
+    1. server defaults built here;
+    2. `:provider_overrides` keyword options, merged over the defaults. Its
+       `:env` (map or `{name, value}` list, values strings or `false` to
+       unset) is the trusted environment override;
+    3. release-boot cleanup applied last: `RELEASE_*`, `BINDIR`, and `ROOTDIR`
+       are unset in the child even if an override names them, and release
+       `bin`/`erts-*/bin` entries are removed from the override or inherited
+       `PATH`.
+
+  Everything else in the server's environment (credentials included) reaches
+  the child unchanged; inherited values are not copied into options or logged.
+  Overrides that swap in a non-CLI `:backend` pass through unchanged.
   """
   def backend_opts(provider, opts \\ []) do
     with {:ok, base} <- build_opts(provider, opts) do
       overrides = Application.get_env(:gen_agent_server, :provider_overrides, %{})
-      {:ok, Keyword.merge(base, Map.get(overrides, provider, []))}
+
+      {:ok,
+       base
+       |> Keyword.merge(Map.get(overrides, provider, []))
+       |> GenAgentServer.ChildEnv.harden_backend_opts()}
     end
   end
 

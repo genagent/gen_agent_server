@@ -4,6 +4,13 @@ defmodule GenAgentServer.Instance do
 
   An instance is a supervision boundary. If either child fails, the instance
   stops instead of restarting with an empty session or result store.
+
+  Agent tuples for the Claude and Codex CLI backends get their child `:env`
+  normalized by `GenAgentServer.ChildEnv` on the way in. This covers the
+  startup default agents from `config/runtime.exs` and direct
+  `GenAgentServer.start_instance/3` callers, which do not go through
+  `GenAgentServer.Providers`. Custom `:strategy_opts` are passed through as
+  given.
   """
 
   use Supervisor
@@ -16,7 +23,7 @@ defmodule GenAgentServer.Instance do
   @impl true
   def init(opts) do
     name = Keyword.fetch!(opts, :name)
-    agents = Keyword.fetch!(opts, :agents)
+    agents = GenAgentServer.ChildEnv.harden_agents(Keyword.fetch!(opts, :agents))
     strategy = Keyword.get(opts, :strategy, GenAgentEnsemble.Strategies.Switchboard)
     strategy_opts = Keyword.get(opts, :strategy_opts, agents: agents)
     routes = Keyword.get(opts, :routes, Enum.map(agents, &elem(&1, 0)))
