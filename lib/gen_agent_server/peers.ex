@@ -13,6 +13,7 @@ defmodule GenAgentServer.Peers do
   @terminal ~w(completed blocked failed)
   @max_entries 256
   @max_events 16
+  @max_frame_bytes 131_072
 
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -52,7 +53,9 @@ defmodule GenAgentServer.Peers do
                :binary,
                active: false,
                packet: :line,
-               packet_size: 131_072,
+               packet_size: @max_frame_bytes,
+               # Line mode can truncate at the receive buffer before JSON decoding.
+               buffer: @max_frame_bytes,
                backlog: 32,
                ifaddr: {:local, String.to_charlist(path)}
              ]) do
