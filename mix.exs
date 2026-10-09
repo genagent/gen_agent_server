@@ -12,7 +12,7 @@ defmodule GenAgentServer.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger], mod: {GenAgentServer.Application, []}]
+    [extra_applications: [:logger, :crypto], mod: {GenAgentServer.Application, []}]
   end
 
   defp deps do

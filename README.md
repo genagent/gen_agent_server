@@ -69,9 +69,10 @@ tools spawned by Claude or Codex, such as a project's own `mix`, then fail
 looking for the release's `start.boot`. The server never changes its own
 environment; instead every Claude and Codex agent gets a child `:env` from
 `GenAgentServer.ChildEnv` that unsets those variables and removes only the
-exact release runtime directories from `PATH`. Credentials and other inherited
-variables pass through untouched; their inherited values are not copied into
-options or logged. This applies to
+exact release runtime directories from `PATH`. Shared MCP bearer configuration
+(`GEN_AGENT_SERVER_SHARED_MCP_*`) is also forced unset in provider children.
+Provider credentials and other inherited variables pass through untouched;
+their inherited values are not copied into options or logged. This applies to
 startup agents, profiles, dynamic routes, patterns, and direct
 `start_instance/3` tuples.
 
@@ -284,6 +285,14 @@ MIX_QUIET=1 mix gen_agent_server.ops run_pattern \
 
 Set `GEN_AGENT_SERVER_RELEASE_BIN` if the release binary lives elsewhere.
 The release's `rpc` command remains available for direct Elixir calls.
+
+## Shared local MCP (opt-in HTTP)
+
+The running release can expose seven scoped tools to independent local clients
+at an authenticated `http://127.0.0.1:<port>/mcp` endpoint. Only explicitly
+allowed startup instances are reachable; clients cannot create instances or
+select directories through this surface. See [startup, security, and volatile
+semantics](docs/shared-mcp.md). The existing stdio catalogue still has 17 tools.
 
 ## MCP (stdio)
 

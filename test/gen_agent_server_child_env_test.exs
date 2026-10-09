@@ -240,7 +240,13 @@ defmodule GenAgentServer.ChildEnvTest do
 
       File.chmod!(probe, 0o755)
 
-      fakes = %{"RELEASE_GEN_AGENT_TEST" => "fake", "BINDIR" => dir, @fake_auth => "fake"}
+      fakes = %{
+        "RELEASE_GEN_AGENT_TEST" => "fake",
+        "BINDIR" => dir,
+        @fake_auth => "fake",
+        "GEN_AGENT_SERVER_SHARED_MCP_TOKEN" => "fake-shared-token"
+      }
+
       previous = Map.new(fakes, fn {name, _} -> {name, System.get_env(name)} end)
       Enum.each(fakes, fn {name, value} -> System.put_env(name, value) end)
 
@@ -256,7 +262,14 @@ defmodule GenAgentServer.ChildEnvTest do
       %{probe: probe}
     end
 
-    @names ["RELEASE_GEN_AGENT_TEST", "BINDIR", "ROOTDIR", @fake_auth, "CUSTOM_FLAG"]
+    @names [
+      "RELEASE_GEN_AGENT_TEST",
+      "BINDIR",
+      "ROOTDIR",
+      @fake_auth,
+      "CUSTOM_FLAG",
+      "GEN_AGENT_SERVER_SHARED_MCP_TOKEN"
+    ]
 
     defp claude_lines(probe, args, env) do
       probe
@@ -276,6 +289,7 @@ defmodule GenAgentServer.ChildEnvTest do
         assert "absent RELEASE_GEN_AGENT_TEST" in lines
         assert "absent BINDIR" in lines
         assert "absent ROOTDIR" in lines
+        assert "absent GEN_AGENT_SERVER_SHARED_MCP_TOKEN" in lines
         assert "present #{@fake_auth}" in lines
         assert "present CUSTOM_FLAG" in lines
       end
