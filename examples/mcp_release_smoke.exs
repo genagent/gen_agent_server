@@ -167,3 +167,46 @@ try do
 after
   Snodo.Client.close(client)
 end
+
+# Start and close a packaged VM before checking IDs in another packaged VM.
+{:ok, previous} =
+  Snodo.Client.connect({:stdio, release, ["eval", "GenAgentServer.MCP.serve()"]})
+
+old_id =
+  try do
+    {:ok, invoked} =
+      Snodo.Client.call_tool(previous, "invoke", %{"agent" => "echo", "prompt" => "old VM"})
+
+    get_in(invoked, ["structuredContent", "id"]) || raise("old VM invoke failed")
+  after
+    Snodo.Client.close(previous)
+  end
+
+# Stopping the packaged stdio VM and starting it again exercises release
+# restart ID semantics without requiring distributed Erlang or an HTTP socket.
+{:ok, restarted} =
+  Snodo.Client.connect({:stdio, release, ["eval", "GenAgentServer.MCP.serve()"]})
+
+try do
+  missing = fn ->
+    {:ok, old} = Snodo.Client.call_tool(restarted, "result", %{"id" => old_id})
+
+    unless old["isError"] and
+             Enum.any?(old["content"], &String.contains?(&1["text"], "not_found")),
+           do: raise("old ID resolved in restarted release")
+  end
+
+  missing.()
+
+  {:ok, invoked} =
+    Snodo.Client.call_tool(restarted, "invoke", %{"agent" => "echo", "prompt" => "restart"})
+
+  new_id = get_in(invoked, ["structuredContent", "id"]) || raise("restart invoke failed")
+  old_namespace = Regex.replace(~r/-\d+\z/, old_id, "")
+  new_namespace = Regex.replace(~r/-\d+\z/, new_id, "")
+  unless old_namespace != new_namespace, do: raise("release reused invocation namespace")
+  missing.()
+  IO.puts("MCP release restart ID smoke passed")
+after
+  Snodo.Client.close(restarted)
+end

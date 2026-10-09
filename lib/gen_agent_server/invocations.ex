@@ -4,6 +4,9 @@ defmodule GenAgentServer.Invocations do
 
   This process is the only consumer of its Ensemble session's `inbox/1`.
   Results are repeatable reads until evicted or the instance stops.
+  IDs include a fresh random 192-bit instance-lifetime namespace. A restarted
+  release or recreated instance cannot reuse an old VM-counter ID. Old IDs
+  return `:not_found` when the instance exists, `:instance_not_found` otherwise.
   """
 
   use GenServer
@@ -68,6 +71,7 @@ defmodule GenAgentServer.Invocations do
             {:ok,
              %{
                name: name,
+               id_namespace: Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false),
                agents: MapSet.new(routes),
                strategy: strategy,
                description: Keyword.get(opts, :description),
@@ -163,7 +167,12 @@ defmodule GenAgentServer.Invocations do
 
         case GenAgentEnsemble.tell(state.name, prompt, ensemble_opts) do
           {:ok, token} ->
-            id = "inv-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
+            id =
+              "inv-" <>
+                state.id_namespace <>
+                "-" <>
+                Integer.to_string(System.unique_integer([:positive, :monotonic]))
+
             started_at_ms = System.monotonic_time(:millisecond)
 
             metadata = %{

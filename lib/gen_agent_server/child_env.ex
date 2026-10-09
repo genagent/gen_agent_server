@@ -13,16 +13,18 @@ defmodule GenAgentServer.ChildEnv do
   the child does not see those values. It never mutates the server's own
   environment and does not copy unrelated inherited values into child options
   or log them, so
-  credentials and other inherited settings reach the child untouched.
+  provider credentials and other inherited settings reach the child untouched.
+  Shared MCP configuration (`GEN_AGENT_SERVER_SHARED_MCP_*`), including the
+  bearer token, is always unset in provider children, even in trusted overrides.
 
   ## Rules, in order
 
     1. Trusted overrides (`:env` under `:provider_overrides`, a map or
        `{name, value}` list; names strings or atoms; values strings or `false`
        to unset) are taken first. `false` is passed through as a Port unset.
-    2. Release boot variables are then forced to `false`: every `RELEASE_*`
-       name present in the parent environment or in the overrides, plus
-       `BINDIR` and `ROOTDIR`. An override cannot set them.
+    2. Release boot variables and every `GEN_AGENT_SERVER_SHARED_MCP_*`
+       variable are then forced to `false` in children, including trusted
+       overrides. `BINDIR` and `ROOTDIR` are also unset.
     3. `PATH` cleanup runs last, over the override `PATH` when one is given
        and over the inherited `PATH` otherwise. Only entries equal to the
        release runtime directories are removed: `BINDIR`, `ROOTDIR/bin`,
@@ -88,7 +90,8 @@ defmodule GenAgentServer.ChildEnv do
   @doc "True for a variable name this module always unsets in children."
   @spec boot_var?(String.t()) :: boolean()
   def boot_var?(name) when is_binary(name) do
-    name in @boot_names or String.starts_with?(name, "RELEASE_")
+    name in @boot_names or String.starts_with?(name, "RELEASE_") or
+      String.starts_with?(name, "GEN_AGENT_SERVER_SHARED_MCP_")
   end
 
   defp normalize_overrides(nil), do: %{}

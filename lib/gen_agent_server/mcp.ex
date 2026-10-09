@@ -68,6 +68,12 @@ defmodule GenAgentServer.MCP do
   """
   def serve do
     stdout_to_protocol_only()
+    # A standalone stdio VM must not compete with the running release's port
+    # when it inherits that operator's otherwise valid shared configuration.
+    unless List.keymember?(Application.started_applications(), :gen_agent_server, 0) do
+      Application.put_env(:gen_agent_server, :shared_mcp, nil)
+    end
+
     {:ok, _} = Application.ensure_all_started(:gen_agent_server)
     # A caller may ask for a longer wait than Snodo's default execution
     # deadline. GenAgentServer.Ops owns the ask timeout and the underlying

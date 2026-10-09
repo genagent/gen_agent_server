@@ -305,7 +305,15 @@ defmodule GenAgentServer.MCPTest do
           :exit_status,
           {:line, 1_000_000},
           {:args, ["gen_agent_server.mcp"]},
-          {:env, [{~c"MIX_ENV", ~c"test"}, {~c"MIX_QUIET", ~c"1"}]},
+          {:env,
+           [
+             {~c"MIX_ENV", ~c"test"},
+             {~c"MIX_QUIET", ~c"1"},
+             {~c"GEN_AGENT_SERVER_SHARED_MCP_ENABLED", ~c"true"},
+             {~c"GEN_AGENT_SERVER_SHARED_MCP_PORT", ~c"4381"},
+             {~c"GEN_AGENT_SERVER_SHARED_MCP_TOKEN", ~c"stdio_fixture_token_is_not_a_secret"},
+             {~c"GEN_AGENT_SERVER_SHARED_MCP_INSTANCES", ~c"[\"server/default\"]"}
+           ]},
           {:cd, File.cwd!()}
         ])
 

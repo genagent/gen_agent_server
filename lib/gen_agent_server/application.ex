@@ -14,6 +14,9 @@ defmodule GenAgentServer.Application do
         {name, Enum.map(specs, &elem(&1, 0))}
       end)
 
+    shared_mcp = Application.get_env(:gen_agent_server, :shared_mcp)
+    GenAgentServer.MCP.Shared.Config.validate_scope!(shared_mcp, instances)
+
     jobs = GenAgentServer.Jobs.load!(profile_file, instances)
 
     quantum_jobs =
@@ -54,7 +57,8 @@ defmodule GenAgentServer.Application do
           {GenAgentServer.Dispatch, jobs},
           {GenAgentServer.Peers, Application.get_env(:gen_agent_server, :peers, [])}
         ] ++
-        if(jobs == [], do: [], else: [GenAgentServer.Scheduler])
+        if(jobs == [], do: [], else: [GenAgentServer.Scheduler]) ++
+        if(shared_mcp, do: [{GenAgentServer.MCP.Shared, shared_mcp}], else: [])
 
     Supervisor.start_link(children,
       strategy: :rest_for_one,
