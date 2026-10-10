@@ -68,14 +68,14 @@ defmodule GenAgentServer.Control.ControllerTest do
     )
   end
 
-  defp ledger(names, limits \\ []) do
+  defp ledger(names, limits \\ [], checks \\ []) do
     l = start_supervised!({Ledger, limits: limits})
 
     {:ok, run} =
       Ledger.open(l, %{
         name: "run",
         control_revision: "v1",
-        tasks: Enum.map(names, &%{name: &1, checkout: File.cwd!(), required_checks: []})
+        tasks: Enum.map(names, &%{name: &1, checkout: File.cwd!(), required_checks: checks})
       })
 
     {l, run}
@@ -100,14 +100,16 @@ defmodule GenAgentServer.Control.ControllerTest do
     n
   end
 
-  defp gated do
+  defp gated(description \\ nil) do
     n = name()
     e = start_supervised!({GatedEnsemble, name: n, target: self()})
 
-    description = %{
-      configured: true,
-      routes: [%{name: "worker", provider: "echo", cwd: File.cwd!(), model: nil, effort: nil}]
-    }
+    description =
+      description ||
+        %{
+          configured: true,
+          routes: [%{name: "worker", provider: "echo", cwd: File.cwd!(), model: nil, effort: nil}]
+        }
 
     owner =
       start_supervised!(
@@ -168,6 +170,242 @@ defmodule GenAgentServer.Control.ControllerTest do
     end)
 
     :ok
+  end
+
+  defp revision(l, run, task, work, fingerprint \\ "a") do
+    assert {:ok, id} =
+             Ledger.record_revision(l, run, %{
+               task: task,
+               produced_by_attempt_id: work,
+               content_sha256: String.duplicate(fingerprint, 64),
+               recorded_by: "caller"
+             })
+
+    id
+  end
+
+  test "explicit Echo reviews retain attribution, deduplicate and permit historical follow-up" do
+    n = instance(["a", "b"])
+    {l, run} = ledger(["a", "b"])
+    c = controller(n, l, run)
+    assert {:ok, work} = Controller.submit(c, "a", "a", spec())
+    assert finished(c, work).status == :completed
+    assert attempt(c, work).kind == :work
+    assert attempt(c, work).subject_revision_id == nil
+    subject = revision(l, run, "a", work)
+
+    review =
+      spec("review this revision", %{stage: "review", kind: :review, subject_revision_id: subject})
+
+    assert {:ok, before} = Ledger.result(l, run)
+    assert Controller.submit(c, "b", "b", review) == {:error, :invalid_subject}
+
+    assert Controller.submit(c, "a", "a", %{review | subject_revision_id: "unknown"}) ==
+             {:error, :not_found}
+
+    assert Controller.submit(
+             c,
+             "a",
+             "a",
+             Map.put(Map.delete(review, :prompt), :prompt_ref, "ref")
+           ) ==
+             {:error, :unsupported_attempt}
+
+    assert Ledger.result(l, run) == {:ok, before}
+    assert {:ok, snapshot} = Controller.status(c)
+    assert map_size(snapshot.attempts) == 1
+
+    assert {:ok, id} = Controller.submit(c, "a", "a", review)
+    assert Controller.submit(c, "a", "a", review) == {:ok, id}
+    assert finished(c, id).text == "echo: review this revision"
+    assert attempt(c, id).kind == :review
+    assert attempt(c, id).subject_revision_id == subject
+    assert attempt(c, id).terminal.actual_model == nil
+    assert {:ok, result} = Controller.result(c)
+    assert Controller.result(c) == {:ok, result}
+    assert Controller.submit(c, "a", "a", review) == {:ok, id}
+
+    assert Controller.submit(c, "a", "a", %{review | instruction_revision: "v2"}) ==
+             {:error, :conflict}
+
+    newer = revision(l, run, "a", work, "b")
+
+    assert Controller.submit(c, "a", "a", %{review | subject_revision_id: newer}) ==
+             {:error, :conflict}
+
+    # A historical subject remains valid; Ledger's current-revision gate decides eligibility.
+    assert {:ok, follow_up} =
+             Controller.submit(c, "a", "a", %{review | stage: "review-follow-up"})
+
+    assert follow_up != id
+    assert finished(c, follow_up).status == :completed
+
+    assert {:ok, _} =
+             Ledger.record_review(l, run, %{
+               revision_id: subject,
+               review_attempt_id: follow_up,
+               verdict: :approve,
+               recorded_by: "caller"
+             })
+
+    assert Ledger.record_acceptance(l, run, %{
+             revision_id: subject,
+             decision: :accepted,
+             recorded_by: "host"
+           }) == {:error, :stale_revision}
+
+    assert {:ok, stored} = Ledger.result(l, run)
+    assert map_size(stored.attempts) == 3
+    assert stored.reserved_bytes == 0
+    assert {:ok, summary} = Ledger.status(l, run)
+    refute summary.tasks["a"].eligible
+  end
+
+  test "APPROVE text and explicit approval cannot bypass a mechanically failed check" do
+    Application.put_env(:gen_agent_server, :provider_overrides, %{
+      "echo" => [backend: GatedBackend, target: self()]
+    })
+
+    n = instance(["a"])
+    {l, run} = ledger(["a"], [], ["test"])
+    c = controller(n, l, run)
+    assert {:ok, work} = Controller.submit(c, "a", "a", spec())
+    assert_receive {:entered, "hello", worker}
+    send(worker, {:finish, "done"})
+    assert finished(c, work).status == :completed
+    subject = revision(l, run, "a", work)
+    review = spec("review", %{stage: "review", kind: :review, subject_revision_id: subject})
+    assert {:ok, id} = Controller.submit(c, "a", "a", review)
+    assert_receive {:entered, "review", reviewer}
+    send(reviewer, {:finish, "APPROVE"})
+    assert finished(c, id).text == "APPROVE"
+    assert {:ok, stored} = Ledger.result(l, run)
+    assert {:ok, summary} = Ledger.status(l, run)
+    refute summary.tasks["a"].eligible
+    refute Enum.any?(stored.records, &(&1.kind == :review))
+    acceptance = %{revision_id: subject, decision: :accepted, recorded_by: "host"}
+    assert Ledger.record_acceptance(l, run, acceptance) == {:error, :missing_approval}
+
+    assert {:ok, _} =
+             Ledger.record_review(l, run, %{
+               revision_id: subject,
+               review_attempt_id: id,
+               verdict: :approve,
+               recorded_by: "caller"
+             })
+
+    {output, exit_status} = System.cmd("sh", ["-c", "exit 1"], cd: File.cwd!())
+    assert exit_status == 1
+
+    assert {:ok, _} =
+             Ledger.record_verification(l, run, %{
+               revision_id: subject,
+               check_name: "test",
+               cwd: File.cwd!(),
+               argv: ["sh", "-c", "exit 1"],
+               exit_status: exit_status,
+               outcome: :failed,
+               output: output,
+               recorded_by: "caller"
+             })
+
+    assert {:ok, summary} = Ledger.status(l, run)
+    refute summary.tasks["a"].eligible
+    refute summary.tasks["a"].accepted
+    assert Ledger.record_acceptance(l, run, acceptance) == {:error, :checks_not_passed}
+  end
+
+  # Fake described providers with real gated Invocations: admission boundary tests,
+  # not paid Codex/Claude execution or mixed-provider issue-batch acceptance.
+  for {provider, key, mode} <- [
+        {"codex", "codex_sandbox", "read_only"},
+        {"codex", "codex_sandbox", "workspace_write"},
+        {"codex", "codex_sandbox", nil},
+        {"codex", "codex_sandbox", "unknown"},
+        {"claude", "claude_permission_mode", "read_only"},
+        {"claude", "claude_permission_mode", "plan"},
+        {"claude", "claude_permission_mode", "accept_edits"},
+        {"claude", "claude_permission_mode", nil},
+        {"claude", "claude_permission_mode", "unknown"}
+      ] do
+    @provider provider
+    @key key
+    @mode mode
+    test "configured review route boundary #{@provider} #{@mode || "missing"}" do
+      route = %{"name" => "worker", "provider" => @provider}
+      route = if @mode, do: Map.put(route, @key, @mode), else: route
+      config = %{"cwd" => File.cwd!(), "routes" => [route]}
+
+      if @mode == "unknown" do
+        assert {:error, _} = GenAgentServer.InstanceSpec.parse(name(), config)
+      end
+
+      config =
+        if @mode == "unknown",
+          do: %{config | "routes" => [Map.put(route, @key, "read_only")]},
+          else: config
+
+      assert {:ok, parsed} = GenAgentServer.InstanceSpec.parse(name(), config)
+
+      description =
+        if @mode == "unknown" do
+          [described] = parsed.description.routes
+          # Deliberately corrupt a fake description: the controller must fail closed too.
+          %{
+            parsed.description
+            | routes: [Map.put(described, String.to_existing_atom(@key), :unknown)]
+          }
+        else
+          parsed.description
+        end
+
+      assert hd(parsed.description.routes).review_read_only_explicit ==
+               @mode in ["read_only", "unknown"]
+
+      {n, e, _} = gated(description)
+      {l, run} = ledger(["a", "b"])
+      c = controller(n, l, run)
+      work_spec = spec("work", %{provider: @provider})
+      assert {:ok, work} = Controller.submit(c, "a", "worker", work_spec)
+      assert_receive {:tell, _, token, "work", _}
+      GenServer.call(e, {:entries, [{token, {:ok, %{text: "done"}}}]})
+      assert finished(c, work).status == :completed
+      subject = revision(l, run, "a", work)
+      review = %{work_spec | stage: "review", kind: :review, prompt: "review"}
+      review = Map.put(review, :subject_revision_id, subject)
+
+      assert Controller.submit(c, "a", "worker", %{review | checkout: "/elsewhere"}) ==
+               {:error, :checkout_mismatch}
+
+      assert Controller.submit(c, "a", "worker", %{review | provider: "echo"}) ==
+               {:error, :provider_mismatch}
+
+      assert Controller.submit(c, "a", "worker", %{
+               review
+               | requested_settings: %{@key => "mismatched"}
+             }) == {:error, :settings_mismatch}
+
+      if @mode == "read_only" do
+        assert Controller.submit(c, "b", "worker", review) == {:error, :invalid_subject}
+
+        assert Controller.submit(c, "a", "worker", %{review | subject_revision_id: "unknown"}) ==
+                 {:error, :not_found}
+
+        refute_receive {:tell, _, _, _, _}
+
+        review = %{review | requested_settings: %{@key => @mode}}
+        assert {:ok, id} = Controller.submit(c, "a", "worker", review)
+        assert_receive {:tell, _, token, "review", _}
+        GenServer.call(e, {:entries, [{token, {:ok, %{text: "APPROVE"}}}]})
+        assert finished(c, id).status == :completed
+        assert attempt(c, id).terminal.actual_model == nil
+      else
+        assert {:ok, before} = Ledger.result(l, run)
+        assert Controller.submit(c, "a", "worker", review) == {:error, :unsafe_review_route}
+        assert Ledger.result(l, run) == {:ok, before}
+        refute_receive {:tell, _, _, _, _}
+      end
+    end
   end
 
   test "three real Echo tasks retain repeat reads after raw eviction" do

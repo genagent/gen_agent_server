@@ -244,9 +244,15 @@ Each `agents` entry has the same `{name, callback_module, backend_options}`
 shape as `config/runtime.exs`. Result IDs are meaningful only within their
 instance. All results and provider sessions remain process-local and volatile.
 
-### Optional controller (first #40 increment)
+Configured route descriptions also include `review_read_only_explicit`: true
+only when the Claude/Codex route config explicitly supplied its `read_only` mode,
+false for omitted modes and Echo. It describes configuration provenance for the
+optional controller's review policy; it is not a backend option. Existing
+provider defaults still apply to ordinary invocations.
 
-`GenAgentServer.Control.Controller` adds caller-started independent work stages
+### Optional controller (explicit #40 stages)
+
+`GenAgentServer.Control.Controller` adds caller-started independent work and explicit review stages
 above Invocations and Ledger. Start a configured instance with `create_instance/2`,
 open a fresh ledger run, then start one controller for that run:
 
@@ -260,12 +266,20 @@ Controller.cancel(controller, attempt) # {:ok, :requested}; inspect later acknow
 ```
 
 `spec` is the exact Ledger attempt specification shown below, with `kind: :work`
-and an inline `prompt`. Task checkout must match both the manifest and sanitized
+or `kind: :review` and an inline `prompt`. A review must name a caller-recorded
+Ledger revision in `subject_revision_id` belonging to the same task. Reviews allow
+Echo or an explicitly configured `codex_sandbox: "read_only"` /
+`claude_permission_mode: "read_only"` route. Missing settings (even if the provider
+default is read-only), unknown permissions, plan and editing modes are rejected.
+The sanitized description preserves explicit access provenance without changing
+provider defaults. Task checkout must match both the manifest and sanitized
 route cwd exactly; Echo describes cwd as nil because it has no filesystem
 backend, so its checkout remains only the manifest attestation. Provider and
 every supplied requested setting must match the route. Settings are assertions about configuration, not invocation overrides.
 Unknown actual model stays nil. Each task/stage accepts one submission: an exact
-route/spec repeat returns its existing attempt ID, changed input conflicts. There
+route/spec repeat returns its existing attempt ID, changed input (including subject)
+conflicts. Choose a distinct stage for another review or follow-up. Historical
+subjects are allowed; Ledger current-revision gates remain authoritative. There
 is no queue or automatic retry. The caller must use one controller per fresh run;
 concurrent controllers for a run are outside this increment's contract.
 
@@ -304,7 +318,8 @@ Cancellation is requested once; its acknowledgement is stored separately in
 `cancel`, and authoritative terminal evidence comes only from completion.
 A timeout never cancels work and cancellation never proves provider cleanup.
 
-Snapshots retain bounded terminal text, invocation/session IDs and failure text,
+Snapshots retain `kind` and `subject_revision_id` (nil for work), bounded terminal
+text, invocation/session IDs and failure text,
 without response events or arbitrary metadata. Nil and empty text remain distinct.
 Oversized/invalid text or terminal metadata that cannot fit the ledger reservation
 leaves the ledger attempt unfinished with an explicit `evidence_error`; available
@@ -317,10 +332,19 @@ messages, provider execution or total VM memory.
 The controller child is temporary. It kills its own helpers on shutdown and
 never stops the shared instance or ledger. Data is process-lifetime only. Existing
 revision/review/check/acceptance gates remain caller-driven through Ledger.
+After completed work, the caller uses `Ledger.record_revision/3` to record the
+actual artifact fingerprint and producing attempt. Submit a review with that
+revision as its subject, then separately call `Ledger.record_review/3` with the
+caller-decided verdict, `record_verification/3` with actual command evidence, and
+`record_acceptance/3` with the host decision. Review output, including `APPROVE`,
+creates none of these records and cannot bypass a failed mechanical check.
+
 Run `mix run examples/control_controller_echo.exs` for two independent Echo tasks,
-deduplicated submit and repeatable evidence after raw eviction. This is the first
-increment, not full #40 acceptance; Echo does not establish two real Claude/Codex
-workflow batches. Independent parent review and tests remain required for shipment.
+explicit caller revision/review/check/acceptance records, deduplicated submit and
+repeatable evidence after raw eviction. These are synthetic example decisions.
+#40 stays open: two actual mixed-provider (Claude/Codex) issue-batch acceptances
+still remain. Route boundary tests use fake described providers with gated
+Invocations; neither they nor Echo establish real mixed-provider acceptance.
 
 ### Optional evidence ledger (#40 foundation)
 

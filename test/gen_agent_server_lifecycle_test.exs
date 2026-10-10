@@ -107,7 +107,8 @@ defmodule GenAgentServer.LifecycleTest do
                "model" => "haiku-test",
                "effort" => "low",
                "cwd" => dir,
-               "claude_permission_mode" => "read_only"
+               "claude_permission_mode" => "read_only",
+               "review_read_only_explicit" => false
              }
 
       assert %{"claude_permission_mode" => "accept_edits", "effort" => "max"} = deep
