@@ -18,7 +18,11 @@ defmodule GenAgentServer.Control.Ledger do
 
   Maps use atom keys and reject unknown keys, structs and arbitrary metadata.
   Strings are at most 4,096 bytes (prompt/text/output/excerpt up to the record byte limit).
-  Lists have at most 32 elements. Paths are absolute caller attestations. Requested
+  Lists have at most 32 elements. Paths are absolute caller attestations. Attempt
+  checkouts must exactly match the declared task checkout. Verification cwd may
+  equal or descend from that checkout after lexical normalization of both paths;
+  supplied cwd is retained unchanged. No existence, realpath or symlink resolution
+  is performed, and containment does not authorize filesystem access. Requested
   settings are a flat map of at most 16 scalar values. See README and the Echo
   example for input shapes. A missing terminal `text` becomes nil, whereas an
   explicitly empty text stays "". Unknown `actual_model` stays nil.
@@ -250,7 +254,7 @@ defmodule GenAgentServer.Control.Ledger do
   defp record_refs(:verification, data, run) do
     with {:ok, revision} <- fetch_revision(run, data.revision_id),
          {:ok, task} <- fetch_task(run, revision.data.task),
-         :ok <- require_true(data.cwd == task.checkout, :checkout_mismatch),
+         :ok <- require_true(within_checkout?(data.cwd, task.checkout), :checkout_mismatch),
          :ok <- require_true(data.outcome != :passed or data.exit_status == 0, :invalid_pass) do
       {:ok, %{}}
     end
@@ -507,6 +511,13 @@ defmodule GenAgentServer.Control.Ledger do
             (value == nil or is_boolean(value) or
                (is_integer(value) and abs(value) <= 1_000_000_000) or valid?(value, :string, l))
         end)
+
+  # Both paths have already been validated as absolute caller attestations.
+  defp within_checkout?(cwd, checkout) do
+    cwd_parts = cwd |> Path.expand() |> Path.split()
+    checkout_parts = checkout |> Path.expand() |> Path.split()
+    Enum.take(cwd_parts, length(checkout_parts)) == checkout_parts
+  end
 
   # Reject improper tails and stop at the bound before length/Enum traversal.
   defp bounded_list?([], _remaining), do: true

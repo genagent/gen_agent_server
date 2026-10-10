@@ -67,12 +67,12 @@ defmodule GenAgentServer.Control.LedgerTest do
     id
   end
 
-  defp verify(l, run, revision, outcome \\ :passed, exit_status \\ 0) do
+  defp verify(l, run, revision, outcome \\ :passed, exit_status \\ 0, cwd \\ "/work/alpha") do
     Ledger.record_verification(l, run, %{
       revision_id: revision,
       check_name: "test",
       argv: ["mix", "test", ""],
-      cwd: "/work/alpha",
+      cwd: cwd,
       exit_status: exit_status,
       outcome: outcome,
       recorded_by: "caller",
@@ -510,6 +510,86 @@ defmodule GenAgentServer.Control.LedgerTest do
     assert recorded.data.cwd == "/work/alpha"
     assert recorded.data.exit_status == 0
     assert recorded.data.outcome == :passed
+  end
+
+  test "verification accepts root and normalized package cwd, retaining supplied evidence" do
+    l = ledger()
+    run = open(l)
+    rev = revision(l, run, completed(l, run))
+
+    for cwd <- [
+          "/work/alpha",
+          "/work/alpha/extensions/ensemble",
+          "/work/alpha/./extensions/other/../ensemble/",
+          "/work/alpha/../alpha/extensions/ensemble",
+          "/work/alpha/extensions/.."
+        ] do
+      assert {:ok, check} = verify(l, run, rev, :passed, 0, cwd)
+      assert {:ok, snapshot} = Ledger.result(l, run)
+      assert Enum.find(snapshot.records, &(&1.id == check)).data.cwd == cwd
+    end
+
+    assert {:error, :missing_approval} = accept(l, run, rev)
+    review = approve(l, run, rev)
+
+    assert {:ok, package_check} =
+             verify(l, run, rev, :passed, 0, "/work/alpha/extensions/ensemble")
+
+    assert {:ok, acceptance} = accept(l, run, rev)
+    assert {:ok, snapshot} = Ledger.result(l, run)
+    accepted = Enum.find(snapshot.records, &(&1.id == acceptance))
+    assert accepted.review_ids == [review]
+    assert accepted.verification_ids == [package_check]
+
+    assert {:ok, %{tasks: %{"alpha" => %{eligible: true, accepted: true}}}} =
+             Ledger.status(l, run)
+  end
+
+  test "rejected verification paths preserve history and current eligibility" do
+    l = ledger()
+    run = open(l)
+    rev = revision(l, run, completed(l, run))
+    approve(l, run, rev)
+    assert {:ok, _} = verify(l, run, rev, :passed, 0, "/work/alpha/extensions/ensemble")
+    assert {:ok, _} = accept(l, run, rev)
+    assert {:ok, before} = Ledger.result(l, run)
+    assert {:ok, status_before} = Ledger.status(l, run)
+
+    for {cwd, reason} <- [
+          {"/work/alpha-other", :checkout_mismatch},
+          {"/work/alphabet/extensions", :checkout_mismatch},
+          {"/work/beta", :checkout_mismatch},
+          {"/work/alpha/../beta", :checkout_mismatch},
+          {"/work/alpha/extensions/../../beta", :checkout_mismatch},
+          {"/work", :checkout_mismatch},
+          {"/", :checkout_mismatch},
+          {"extensions/ensemble", :invalid_record},
+          {"./alpha", :invalid_record},
+          {"../alpha", :invalid_record}
+        ] do
+      assert {:error, ^reason} = verify(l, run, rev, :failed, 1, cwd)
+      assert Ledger.result(l, run) == {:ok, before}
+      assert Ledger.status(l, run) == {:ok, status_before}
+    end
+  end
+
+  test "verification normalizes declared checkout while attempt attribution stays exact" do
+    l = ledger()
+    checkout = "/work/./alpha/package/../"
+    task = %{hd(manifest().tasks) | checkout: checkout}
+    assert {:ok, run} = Ledger.open(l, %{manifest() | tasks: [task]})
+
+    for cwd <- ["/work/alpha", "/work/alpha/extensions/ensemble"] do
+      assert {:error, :checkout_mismatch} =
+               Ledger.record_attempt(l, run, "alpha", spec("alpha", %{checkout: cwd}))
+    end
+
+    work = completed(l, run, "alpha", %{checkout: checkout})
+    rev = revision(l, run, work)
+    assert {:ok, _} = verify(l, run, rev, :passed, 0, "/work/alpha/extensions/ensemble")
+    assert {:ok, snapshot} = Ledger.result(l, run)
+    assert snapshot.attempts[work].spec.checkout == checkout
+    assert snapshot.manifest.tasks == [task]
   end
 
   test "revision producer must be completed work in that task" do
