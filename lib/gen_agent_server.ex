@@ -133,6 +133,22 @@ defmodule GenAgentServer do
     GenAgentServer.Invocations.invoke(instance, agent, prompt, opts)
   end
 
+  @doc """
+  Read content-free summaries of retained invocations, newest admission first.
+
+  Requires an instance name. `:limit` defaults to 50 and must be an integer
+  from 1 through 200; invalid limits return `{:error, :invalid_limit}`.
+  Pending summaries have nil completion time and duration. Timestamps use Unix
+  milliseconds; terminal durations use monotonic elapsed milliseconds.
+  Terminal times are recorded when the owner collects the completion, rather
+  than a provider-supplied finish time.
+  Reads collect available completions and do not refresh retention. Summaries
+  disappear with result eviction or instance restart.
+  """
+  def invocations(instance, opts \\ []) do
+    GenAgentServer.Invocations.invocations(instance, opts)
+  end
+
   def result(id) when is_binary(id), do: result(session_name(), id)
 
   def result(instance, id) when is_binary(instance) and is_binary(id) do

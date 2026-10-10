@@ -9,7 +9,8 @@ defmodule GenAgentServer.MCPTest do
   @peer_tool_names ~w(discover_peers bind_peer send_peer_message peer_result)
   @tool_names Enum.sort(
                 @legacy_tool_names ++
-                  @lifecycle_tool_names ++ @source_tool_names ++ @peer_tool_names
+                  @lifecycle_tool_names ++
+                  @source_tool_names ++ @peer_tool_names ++ ["invocations"]
               )
 
   setup do
@@ -150,6 +151,38 @@ defmodule GenAgentServer.MCPTest do
 
     assert %{"status" => "completed", "text" => "echo: hi"} =
              ok!(client, "ask", %{"agent" => "echo", "prompt" => "hi"})
+  end
+
+  test "invocations exposes the content-free Ops projection with a required instance", %{
+    client: client
+  } do
+    name = "mcp-summaries-#{System.unique_integer([:positive])}"
+    agents = [{"echo", GenAgentEnsemble.Agents.Simple, [backend: GenAgentEnsemble.Backends.Echo]}]
+    assert {:ok, _} = GenAgentServer.start_instance(name, agents)
+    on_exit(fn -> GenAgentServer.stop_instance(name) end)
+
+    assert %{"id" => id} =
+             ok!(client, "invoke", %{
+               "instance" => name,
+               "agent" => "echo",
+               "prompt" => "private prompt"
+             })
+
+    assert eventually(fn ->
+             match?(
+               %{"status" => "completed"},
+               ok!(client, "result", %{"instance" => name, "id" => id})
+             )
+           end)
+
+    assert %{"instance" => ^name, "invocations" => [%{"id" => ^id, "status" => "completed"}]} =
+             data = ok!(client, "invocations", %{"instance" => name, "limit" => 1})
+
+    assert data == ok!(client, "invocations", %{"instance" => name, "limit" => 1})
+    refute Jason.encode!(data) =~ "private prompt"
+    assert error!(client, "invocations", %{}) =~ "instance"
+    assert error!(client, "invocations", %{"instance" => "nope"}) =~ "instance_not_found"
+    assert error!(client, "invocations", %{"instance" => name, "limit" => 0}) =~ "invalid_limit"
   end
 
   test "unknown routes, instances, and ids are tool errors", %{client: client} do

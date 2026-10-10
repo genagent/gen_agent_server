@@ -60,6 +60,22 @@ defmodule GenAgentServer.Ops do
         end
       ),
       op(
+        "invocations",
+        "Read content-free retained invocation summaries, newest admission first.",
+        false,
+        [
+          req("instance", :string, "Instance name"),
+          opt("limit", :integer, "Maximum entries (default 50, range 1..200)")
+          |> Map.put(:schema, %{"minimum" => 1, "maximum" => 200})
+        ],
+        fn a ->
+          opts = if Map.has_key?(a, "limit"), do: [limit: a["limit"]], else: []
+
+          with {:ok, summaries} <- GenAgentServer.invocations(a["instance"], opts),
+               do: {:ok, %{instance: a["instance"], invocations: jsonable(summaries)}}
+        end
+      ),
+      op(
         "result",
         "Read an invocation result. Repeatable until evicted.",
         false,
