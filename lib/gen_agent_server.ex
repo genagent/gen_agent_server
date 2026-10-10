@@ -120,6 +120,14 @@ defmodule GenAgentServer do
     invoke(instance, agent, prompt, [])
   end
 
+  @doc """
+  Admit a turn with an optional `recipient: pid | nil` (default nil).
+  The owner attempts one `{:gen_agent_server, :completion, metadata, result}`
+  send per observed terminal result, before eviction. Metadata contains instance,
+  agent, invocation_id, ensemble_token and source; cancellation adds cancellation_ack.
+  Delivery is not durable and is not guaranteed after instance shutdown.
+  Invalid recipients return `{:error, :invalid_recipient}` before admission.
+  """
   def invoke(instance, agent, prompt, opts)
       when is_binary(instance) and is_binary(agent) and is_binary(prompt) and is_list(opts) do
     GenAgentServer.Invocations.invoke(instance, agent, prompt, opts)
@@ -129,6 +137,23 @@ defmodule GenAgentServer do
 
   def result(instance, id) when is_binary(instance) and is_binary(id) do
     GenAgentServer.Invocations.result(instance, id)
+  end
+
+  @doc """
+  Cancel a pending invocation after collecting available completions.
+
+  Returns `{:ok, :cancelled | :cancelled_unconfirmed}` if cancellation wins,
+  or `{:error, :already_finished | :not_found | :instance_not_found | :unsupported}`.
+  Unsupported cancellation leaves work pending. Retained cancellation results
+  remain `{:ok, :failed, :cancelled}`; all retained terminal IDs are already finished.
+  An external cancellation has notification acknowledgement `:cancelled_unconfirmed`.
+
+  This synchronous call can block the invocation owner for potentially unbounded
+  time. Acknowledgement does not guarantee external provider process settlement.
+  Finalization releases raw admission capacity while unrelated work continues.
+  """
+  def cancel(instance, id) when is_binary(instance) and is_binary(id) do
+    GenAgentServer.Invocations.cancel(instance, id)
   end
 
   def ask(agent, prompt, opts \\ []) when is_binary(agent) and is_binary(prompt) do

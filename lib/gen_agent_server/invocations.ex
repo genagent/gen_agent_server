@@ -35,6 +35,8 @@ defmodule GenAgentServer.Invocations do
   @spec result(String.t(), String.t()) :: result()
   def result(name, id), do: call_instance(name, {:result, id})
 
+  def cancel(name, id), do: call_instance(name, {:cancel, id})
+
   def via(name), do: {:via, Registry, {GenAgentServer.Registry, {:invocations, name}}}
 
   defp call_instance(name, request) do
@@ -146,10 +148,59 @@ defmodule GenAgentServer.Invocations do
     end
   end
 
+  def handle_call({:cancel, id}, _from, state) do
+    case collect_available(state) do
+      {:ok, state} -> cancel_pending(id, state)
+      {:error, reason} -> {:stop, {:inbox_failed, reason}, {:error, reason}, state}
+    end
+  end
+
+  defp cancel_pending(id, state) do
+    cond do
+      Map.has_key?(state.completed, id) ->
+        {:reply, {:error, :already_finished}, state}
+
+      not Map.has_key?(state.pending, id) ->
+        {:reply, {:error, :not_found}, state}
+
+      not (Code.ensure_loaded?(GenAgentEnsemble) and
+               function_exported?(GenAgentEnsemble, :cancel, 2)) ->
+        {:reply, {:error, :unsupported}, state}
+
+      true ->
+        token = state.pending[id].metadata.ensemble_token
+        reply = apply(GenAgentEnsemble, :cancel, [state.name, token])
+
+        state =
+          case reply do
+            {:ok, ack} when ack in [:cancelled, :cancelled_unconfirmed] ->
+              put_in(state.pending[id].metadata[:cancellation_ack], ack)
+
+            _ ->
+              state
+          end
+
+        case collect_available(state) do
+          {:ok, state} -> {:reply, reply, state}
+          {:error, reason} -> {:stop, {:inbox_failed, reason}, {:error, reason}, state}
+        end
+    end
+  end
+
   defp admit(agent, prompt, opts, state) do
     {source, route_opts} = Keyword.pop(opts, :source, :api)
+    recipient = Keyword.get(opts, :recipient)
+    route_opts = Keyword.drop(route_opts, [:recipient])
 
     cond do
+      not Enum.all?(Keyword.get_values(opts, :recipient), &(is_nil(&1) or is_pid(&1))) ->
+        reject(
+          state,
+          agent,
+          if(source in @sources, do: source, else: :unknown),
+          :invalid_recipient
+        )
+
       source not in @sources ->
         reject(state, agent, :unknown, :invalid_source)
 
@@ -186,7 +237,11 @@ defmodule GenAgentServer.Invocations do
             state = %{
               state
               | pending:
-                  Map.put(state.pending, id, %{metadata: metadata, started_at_ms: started_at_ms}),
+                  Map.put(state.pending, id, %{
+                    metadata: metadata,
+                    started_at_ms: started_at_ms,
+                    recipient: recipient
+                  }),
                 by_token: Map.put(state.by_token, token, id)
             }
 
@@ -236,7 +291,13 @@ defmodule GenAgentServer.Invocations do
         state
 
       {id, by_token} ->
-        %{metadata: metadata, started_at_ms: started_at_ms} = Map.fetch!(state.pending, id)
+        %{metadata: metadata, started_at_ms: started_at_ms, recipient: recipient} =
+          Map.fetch!(state.pending, id)
+
+        metadata =
+          if outcome == {:error, :cancelled},
+            do: Map.put_new(metadata, :cancellation_ack, :cancelled_unconfirmed),
+            else: metadata
 
         result =
           case outcome do
@@ -256,6 +317,9 @@ defmodule GenAgentServer.Invocations do
             completed: Map.put(state.completed, id, result),
             completion_order: :queue.in(id, state.completion_order)
         }
+
+        if is_pid(recipient),
+          do: send(recipient, {:gen_agent_server, :completion, metadata, result})
 
         evict_excess(state)
     end

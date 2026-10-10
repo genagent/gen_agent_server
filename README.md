@@ -180,9 +180,9 @@ Invalid cron expressions fail configuration loading with the job name and file
 path.
 An admission rejection or prompt-file read failure has no invocation ID;
 inspect Quantum job telemetry for that run. Admission rejections also emit
-the server's usual rejection event with `source: :scheduler`. Individual
-scheduled turns cannot yet be cancelled; GenAgent's turn watchdog bounds
-active work. Start with read-only jobs and review their results.
+the server's usual rejection event with `source: :scheduler`. Turns with a known
+invocation ID can be cancelled through the Elixir API below. Start with read-only
+jobs and review their results.
 
 `invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
 `{:ok, :pending}`, `{:ok, :completed, response}`, or
@@ -193,6 +193,40 @@ return `{:error, :busy}` while all in-flight slots remain occupied. A new
 admission checks for completed turns before applying this limit. An `ask/3` timeout only ends
 the wait: the invocation keeps running and its result remains available through
 its ID if the caller used `invoke/2`.
+
+The Elixir API also supports cancellation and optional terminal delivery:
+
+```elixir
+{:ok, id} = GenAgentServer.invoke("review", "codex", "Review this module",
+  recipient: self(), source: :api)
+GenAgentServer.cancel("review", id)
+# {:ok, :cancelled} or {:ok, :cancelled_unconfirmed} when cancellation wins
+# receive {:gen_agent_server, :completion, metadata, terminal_result}
+```
+
+Cancellation collects existing completions first. A retained terminal ID returns
+`{:error, :already_finished}`; unknown, evicted, wrong-instance or previous-generation
+IDs return `{:error, :not_found}`, and a missing instance returns
+`{:error, :instance_not_found}`. Older Ensemble releases without `cancel/2` and
+custom strategies without cancellation support return `{:error, :unsupported}`
+and leave work pending. Results retain the existing shape: cancellation is
+`{:ok, :failed, :cancelled}` and reads remain repeatable until eviction.
+
+Recipient must be a PID or nil; invalid values are rejected before admission.
+Recipient options are consumed by the server and never forwarded to Ensemble or
+backends. For every observed terminal success, error or cancellation, the owner
+attempts one send before result eviction. Metadata includes `instance`, `agent`,
+`invocation_id`, `ensemble_token` and `source`; cancellation includes
+`cancellation_ack`. Cancellation observed without an owner acknowledgement uses
+`:cancelled_unconfirmed`. The message carries the full retained result, even if
+that result is subsequently evicted in the same batch. There is no durable
+delivery, dead-recipient receipt or instance-shutdown notification guarantee.
+
+Cancellation is synchronous and can block the invocation owner for potentially
+unbounded time, delaying invoke/result/cancel calls. Its acknowledgement covers
+request cancellation, not external provider process settlement. Finalization
+releases raw admission capacity while unrelated work continues. The owner remains
+the sole Ensemble inbox consumer; do not drain its managed session directly.
 
 An embedding application can run independent instances with distinct agent
 specs and result stores:

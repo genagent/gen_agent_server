@@ -8,7 +8,7 @@ defmodule GenAgentServer.Telemetry do
       `system_time` uses the VM native time unit.
     * `[:gen_agent_server, :invocation, :stop]` — completed turn; measurement
       `duration_ms` is elapsed milliseconds since admission.
-    * `[:gen_agent_server, :invocation, :error]` — failed turn; the same
+    * `[:gen_agent_server, :invocation, :error]` — failed or cancelled turn; the same
       `duration_ms` measurement and a bounded `error_kind` category.
     * `[:gen_agent_server, :admission, :rejected]` — request not admitted,
       with a bounded `reason` category and no invocation ID.
@@ -16,8 +16,11 @@ defmodule GenAgentServer.Telemetry do
       waiting; the invocation itself may still complete later.
 
   Invocation metadata contains `instance`, `agent`, `invocation_id`,
-  `ensemble_token`, and `source`. It never includes prompts, responses,
-  backend state, or raw error terms. IDs and names are correlation fields,
+  `ensemble_token`, and `source`.
+  Cancellation errors use `error_kind: :cancelled` and may include
+  `cancellation_ack: :cancelled | :cancelled_unconfirmed`.
+  It never includes prompts, responses, backend state, or raw error terms.
+  IDs and names are correlation fields,
   not suitable as metric labels.
   """
 
@@ -66,11 +69,13 @@ defmodule GenAgentServer.Telemetry do
   defp elapsed_ms(started_at_ms), do: max(System.monotonic_time(:millisecond) - started_at_ms, 0)
 
   defp error_kind(:timeout), do: :timeout
+  defp error_kind(:cancelled), do: :cancelled
   defp error_kind({:task_crashed, _}), do: :task_crashed
   defp error_kind(_), do: :backend_error
 
   defp rejection_kind({:unknown_agent, _}), do: :unknown_agent
   defp rejection_kind(:busy), do: :busy
   defp rejection_kind(:invalid_source), do: :invalid_source
+  defp rejection_kind(:invalid_recipient), do: :invalid_recipient
   defp rejection_kind(_), do: :admission_error
 end
