@@ -192,10 +192,16 @@ defmodule GenAgentServer.Control.ControllerTest do
     assert finished(c, work).status == :completed
     assert attempt(c, work).kind == :work
     assert attempt(c, work).subject_revision_id == nil
+    assert attempt(c, work).expected_output == nil
     subject = revision(l, run, "a", work)
 
     review =
-      spec("review this revision", %{stage: "review", kind: :review, subject_revision_id: subject})
+      spec("review this revision", %{
+        stage: "review",
+        kind: :review,
+        subject_revision_id: subject,
+        expected_output: " review guidance é "
+      })
 
     assert {:ok, before} = Ledger.result(l, run)
     assert Controller.submit(c, "b", "b", review) == {:error, :invalid_subject}
@@ -219,6 +225,7 @@ defmodule GenAgentServer.Control.ControllerTest do
     assert Controller.submit(c, "a", "a", review) == {:ok, id}
     assert finished(c, id).text == "echo: review this revision"
     assert attempt(c, id).kind == :review
+    assert attempt(c, id).expected_output == review.expected_output
     assert attempt(c, id).subject_revision_id == subject
     assert attempt(c, id).terminal.actual_model == nil
     assert {:ok, result} = Controller.result(c)
@@ -269,12 +276,20 @@ defmodule GenAgentServer.Control.ControllerTest do
     n = instance(["a"])
     {l, run} = ledger(["a"], [], ["test"])
     c = controller(n, l, run)
-    assert {:ok, work} = Controller.submit(c, "a", "a", spec())
+    assert {:ok, work} = Controller.submit(c, "a", "a", spec("hello", %{expected_output: "done"}))
     assert_receive {:entered, "hello", worker}
     send(worker, {:finish, "done"})
     assert finished(c, work).status == :completed
     subject = revision(l, run, "a", work)
-    review = spec("review", %{stage: "review", kind: :review, subject_revision_id: subject})
+
+    review =
+      spec("review", %{
+        stage: "review",
+        kind: :review,
+        subject_revision_id: subject,
+        expected_output: "APPROVE"
+      })
+
     assert {:ok, id} = Controller.submit(c, "a", "a", review)
     assert_receive {:entered, "review", reviewer}
     send(reviewer, {:finish, "APPROVE"})
@@ -282,7 +297,7 @@ defmodule GenAgentServer.Control.ControllerTest do
     assert {:ok, stored} = Ledger.result(l, run)
     assert {:ok, summary} = Ledger.status(l, run)
     refute summary.tasks["a"].eligible
-    refute Enum.any?(stored.records, &(&1.kind == :review))
+    refute Enum.any?(stored.records, &(&1.kind in [:review, :acceptance]))
     acceptance = %{revision_id: subject, decision: :accepted, recorded_by: "host"}
     assert Ledger.record_acceptance(l, run, acceptance) == {:error, :missing_approval}
 
@@ -501,6 +516,166 @@ defmodule GenAgentServer.Control.ControllerTest do
                {Controller, [instance: n, ledger: l, run: run, limits: [unfinished: 9]]},
                id: :invalid_controller
              )
+  end
+
+  test "invalid declarations preserve all state before invocation" do
+    {n, _, _} = gated()
+    {l, run} = ledger(["a"])
+    c = controller(n, l, run)
+    controller_before = :sys.get_state(c)
+    ledger_before = :sys.get_state(l)
+
+    for value <- [
+          String.duplicate("x", 4097),
+          String.duplicate("é", 2048) <> "x",
+          <<255>>,
+          "",
+          nil,
+          1,
+          :output,
+          [],
+          %{}
+        ],
+        kind <- [:work, :review] do
+      changes = %{expected_output: value, kind: kind}
+
+      changes =
+        if kind == :review, do: Map.put(changes, :subject_revision_id, "unknown"), else: changes
+
+      assert Controller.submit(c, "a", "worker", spec("original", changes)) ==
+               {:error, :invalid_record}
+
+      assert :sys.get_state(c) == controller_before
+      assert :sys.get_state(l) == ledger_before
+      refute_receive {:tell, _, _, _, _}, 0
+    end
+  end
+
+  test "declarations copy exact bytes, deduplicate and leave prompt and options unchanged" do
+    {n, e, _} = gated()
+    {l, run} = ledger(["a"])
+    c = controller(n, l, run)
+    backing = String.duplicate("é", 100_000)
+    sub = binary_part(backing, 100, 4096)
+    assert :binary.referenced_byte_size(sub) > byte_size(sub)
+
+    for {value, stage} <- [
+          {"x", "one"},
+          {String.duplicate("x", 4096), "ascii"},
+          {" é\n", "exact"},
+          {sub, "sub"}
+        ] do
+      prompt = " original prompt\n"
+      declaration_spec = spec(prompt, %{stage: stage, expected_output: value})
+      assert {:ok, id} = Controller.submit(c, "a", "worker", declaration_spec)
+      assert_receive {:tell, _, token, ^prompt, opts}
+      assert opts == []
+      assert Controller.submit(c, "a", "worker", declaration_spec) == {:ok, id}
+
+      for conflict <- [
+            Map.delete(declaration_spec, :expected_output),
+            %{declaration_spec | expected_output: "changed"}
+          ] do
+        assert Controller.submit(c, "a", "worker", conflict) == {:error, :conflict}
+      end
+
+      refute_receive {:tell, _, _, _, _}, 0
+      :ok = GenServer.call(e, {:entries, [{token, {:ok, %{text: "done"}}}]})
+      assert finished(c, id).status == :completed
+      assert {:ok, snapshot} = Controller.status(c)
+      assert snapshot.attempts[id].expected_output == value
+
+      assert :binary.referenced_byte_size(snapshot.attempts[id].expected_output) ==
+               byte_size(value)
+
+      assert Controller.status(c) == {:ok, snapshot}
+      assert Controller.result(c) == {:ok, snapshot}
+      assert {:ok, stored} = Ledger.result(l, run)
+      assert stored.attempts[id].spec == declaration_spec
+
+      assert :binary.referenced_byte_size(:sys.get_state(c).attempts[id].spec.expected_output) ==
+               byte_size(value)
+    end
+
+    omitted = spec("plain", %{stage: "omitted"})
+    assert {:ok, id} = Controller.submit(c, "a", "worker", omitted)
+    assert_receive {:tell, _, token, "plain", []}
+
+    assert Controller.submit(c, "a", "worker", Map.put(omitted, :expected_output, "added")) ==
+             {:error, :conflict}
+
+    :ok = GenServer.call(e, {:entries, [{token, {:ok, %{text: "plain"}}}]})
+    finished(c, id)
+    assert attempt(c, id).expected_output == nil
+  end
+
+  test "encoded declaration record and total budget boundaries precede invocation" do
+    {n, e, _} = gated()
+    declaration_spec = spec("original", %{expected_output: " exact é guidance "})
+    fixed_id = String.duplicate("a", 24)
+    # Reservation is encoded as a small integer at these ceilings.
+    entry = %{
+      id: fixed_id <> "/2",
+      kind: :attempt,
+      task: "a",
+      spec: declaration_spec,
+      terminal: nil,
+      reserved_bytes: 1024
+    }
+
+    ceiling = :erlang.external_size(entry)
+
+    manifest = %{
+      name: "run",
+      control_revision: "v1",
+      tasks: [%{name: "a", checkout: File.cwd!(), required_checks: []}]
+    }
+
+    manifest_bytes =
+      :erlang.external_size(%{id: fixed_id <> "/1", kind: :manifest, data: manifest})
+
+    total = manifest_bytes + ceiling + ceiling
+
+    for {record_limit, total_limit, outcome} <- [
+          {ceiling - 1, total, :reject},
+          {ceiling, total - 1, :reject},
+          {ceiling, total, :admit}
+        ] do
+      l =
+        start_supervised!(
+          {Ledger, limits: [record_bytes: record_limit, total_bytes: total_limit]},
+          id: {record_limit, total_limit}
+        )
+
+      assert {:ok, run} = Ledger.open(l, manifest)
+
+      c =
+        start_supervised!({Controller, instance: n, ledger: l, run: run},
+          id: {:controller, record_limit, total_limit}
+        )
+
+      before_l = :sys.get_state(l)
+      before_c = :sys.get_state(c)
+
+      if outcome == :reject do
+        assert Controller.submit(c, "a", "worker", declaration_spec) == {:error, :quota_exhausted}
+        assert :sys.get_state(l) == before_l
+        assert :sys.get_state(c) == before_c
+        refute_receive {:tell, _, _, _, _}, 0
+      else
+        assert {:ok, id} = Controller.submit(c, "a", "worker", declaration_spec)
+        assert_receive {:tell, _, token, "original", []}
+        assert {:ok, pending} = Ledger.result(l, run)
+        assert pending.bytes == manifest_bytes + ceiling
+        assert pending.reserved_bytes == ceiling
+        assert pending.attempts[id].reserved_bytes == ceiling
+        :ok = GenServer.call(e, {:entries, [{token, {:ok, %{text: "done"}}}]})
+        assert finished(c, id).status == :completed
+        assert {:ok, stored} = Ledger.result(l, run)
+        assert stored.reserved_bytes == 0
+        assert stored.attempts[id].reserved_bytes == 0
+      end
+    end
   end
 
   test "reservation rejection precedes invocation" do
