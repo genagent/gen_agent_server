@@ -318,6 +318,23 @@ Cancellation is requested once; its acknowledgement is stored separately in
 `cancel`, and authoritative terminal evidence comes only from completion.
 A timeout never cancels work and cancellation never proves provider cleanup.
 
+Each admitted attempt snapshot adds
+`timing: %{admitted_at_unix_ms: integer, terminal_observed_after_ms: nil | nonnegative_integer}`.
+The admission timestamp is wall-clock Unix milliseconds captured after successful
+ledger admission. The duration uses a private monotonic clock start and measures
+controller admission to its first authoritative completed, failed, cancelled or
+definite admission-failed observation, in milliseconds. Reads, duplicate submits
+and late events do not reset timing. Evidence validation or persistence failure
+retains an observed duration. Uncertainty, unobserved/fenced execution and cancel
+acknowledgement alone leave the duration nil; a later authoritative observation
+from the original owner can fill it while that lifetime remains unfenced.
+Malformed or uncorrelatable completion notifications do not establish a terminal
+observation; an invalid accepted notification can leave the attempt uncertain
+without a duration.
+This is process-local observation timing, not provider CPU duration or global
+cost. It has no restart durability, is absent from Ledger evidence, and exposes
+no private monotonic timestamp.
+
 Snapshots retain `kind` and `subject_revision_id` (nil for work), bounded terminal
 text, invocation/session IDs and failure text,
 without response events or arbitrary metadata. Nil and empty text remain distinct.
