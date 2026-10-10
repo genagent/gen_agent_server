@@ -333,11 +333,23 @@ IDs; it bounds retained evidence, not total VM memory, projections or raw mailbo
 Strings are at most 4,096 bytes, except prompt/text/output/excerpt up to the record
 limit; lists have at most 32 entries and requested settings at most 16 pairs.
 `:infinity` is rejected. Storage exhaustion returns `{:error, :quota_exhausted}`;
-malformed fields return `{:error, :invalid_record}`. Terminal **byte** capacity is
-not reserved: a full byte budget or oversized finish preserves the unfinished
-attempt without erasing old state. Callers must budget byte room, retry with bounded
-evidence, or forget another eligible run to free overall bytes. Record-count
-exhaustion cannot consume an admitted attempt's reserved terminal slot.
+malformed fields return `{:error, :invalid_record}`. Ordinary `record_attempt/4`
+and `record_attempt/5` with `[]` or `reserve_terminal: false` reserve no bytes;
+a full byte budget or oversized finish preserves the unfinished attempt.
+Use `Ledger.record_attempt(ledger, run, task, spec, reserve_terminal: true)` before
+invoking work to reserve the full configured `record_bytes` ceiling for its terminal.
+Admission requires the actual encoded attempt plus that reservation to fit alongside
+all retained bytes and outstanding reservations across runs. Every manifest, attempt
+and gate respects that shared capacity. Any valid encoded terminal within the record
+ceiling can then finish, including after `close/2`, and releases exactly its own
+reservation. Invalid or oversized evidence preserves it; identical duplicate finishes
+and conflicting terminals do not charge or release again. Run snapshots and status
+report actual `bytes` separately from outstanding `reserved_bytes`; opted-in attempts
+also expose `reserved_bytes`, which becomes zero on finish. Record-count exhaustion
+cannot consume an admitted attempt's reserved terminal slot. Options accept only `[]`
+or a single boolean `reserve_terminal` pair; all other shapes, values, duplicate or
+unknown keys return `{:error, :invalid_options}` with bounded validation.
+Callers must still submit bounded evidence; ledger death loses reservations and data.
 
 `close/2` stops new attempts/gates while permitting existing attempts to finish;
 `forget/2` removes only an entire closed run without unfinished attempts. There
