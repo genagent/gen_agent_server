@@ -51,7 +51,7 @@ try do
   names = Enum.map(tools, & &1["name"]) |> Enum.sort()
 
   expected =
-    ~w(agents ask bind_peer create_instance describe_instance discover_peers instances invoke peer_result public_file public_issue public_issues public_revision result send_peer_message status stop_instance)
+    ~w(agents ask bind_peer create_instance describe_instance discover_peers instances invocations invoke peer_result public_file public_issue public_issues public_revision result send_peer_message status stop_instance)
 
   unless names == expected, do: raise("wrong MCP catalogue: #{inspect(names)}")
 
@@ -85,6 +85,18 @@ try do
 
   unless result && result["text"] == "echo: repeat" && read.() == result,
     do: raise("MCP result was not repeatable: #{inspect(result)}")
+
+  summary_args = %{"instance" => invoked["structuredContent"]["instance"], "limit" => 1}
+
+  {:ok, summaries} = Snodo.Client.call_tool(client, "invocations", summary_args)
+  {:ok, repeated_summaries} = Snodo.Client.call_tool(client, "invocations", summary_args)
+
+  unless get_in(summaries, ["structuredContent", "invocations"]) |> Enum.map(& &1["id"]) ==
+           [id] and summaries == repeated_summaries,
+         do: raise("MCP summaries were not retained and repeatable")
+
+  if Jason.encode!(summaries["structuredContent"]) =~ "repeat",
+    do: raise("MCP summaries exposed response content")
 
   # Lifecycle: provider routes need a CLI and credentials, so the packaged
   # check creates echo routes and confirms provider validation without starting
