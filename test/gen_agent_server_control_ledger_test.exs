@@ -1022,8 +1022,11 @@ defmodule GenAgentServer.Control.LedgerTest do
         end
       end)
 
-    assert_receive {:started, l, _run}
+    assert_receive {:started, l, run}
     ledger_ref = Process.monitor(l)
+    # The monitor signal and this call come from this process in order. Wait for
+    # the ledger to process both before another process sends its linked exit.
+    assert {:ok, _} = Ledger.status(l, run)
     send(starter, :stop)
     assert_receive {:DOWN, ^starter_ref, :process, ^starter, :starter_failed}
     assert_receive {:DOWN, ^ledger_ref, :process, ^l, :starter_failed}

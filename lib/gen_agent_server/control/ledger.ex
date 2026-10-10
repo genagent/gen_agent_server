@@ -91,6 +91,9 @@ defmodule GenAgentServer.Control.Ledger do
   def result(server, run), do: GenServer.call(server, {:read, run, :result})
   def status(server, run), do: GenServer.call(server, {:read, run, :status})
 
+  @doc "Validate an attempt's shape against hard ceilings without recording it."
+  def validate_attempt_spec(spec), do: validate_spec(spec, @limits)
+
   @impl true
   def init(overrides) do
     if bounded_list?(overrides, 32) and Keyword.keyword?(overrides) and

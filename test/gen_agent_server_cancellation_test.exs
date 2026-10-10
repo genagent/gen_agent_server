@@ -285,6 +285,21 @@ defmodule GenAgentServerCancellationTest do
     assert {:ok, :failed, :cancelled} = GenAgentServer.result(name, id)
   end
 
+  test "recipient_ref is validated, stripped and echoed only when supplied" do
+    {name, ensemble, _} = fixture()
+
+    assert {:error, :invalid_recipient_ref} =
+             GenAgentServer.invoke(name, "worker", "secret", recipient_ref: "invalid")
+
+    refute_receive {:tell, _, _, _}, 0
+    ref = make_ref()
+    {id, token, opts} = invoke(name, recipient: self(), recipient_ref: ref)
+    assert opts == []
+    :ok = GenServer.call(ensemble, {:entries, [{token, {:ok, :done}}]})
+    assert {:ok, :completed, :done} = GenAgentServer.result(name, id)
+    assert_receive {:gen_agent_server, :completion, %{recipient_ref: ^ref, invocation_id: ^id}, _}
+  end
+
   test "nil recipient retains a result without sending a notification" do
     {name, ensemble, _} = fixture()
     {id, token, opts} = invoke(name, recipient: nil)

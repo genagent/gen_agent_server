@@ -244,6 +244,84 @@ Each `agents` entry has the same `{name, callback_module, backend_options}`
 shape as `config/runtime.exs`. Result IDs are meaningful only within their
 instance. All results and provider sessions remain process-local and volatile.
 
+### Optional controller (first #40 increment)
+
+`GenAgentServer.Control.Controller` adds caller-started independent work stages
+above Invocations and Ledger. Start a configured instance with `create_instance/2`,
+open a fresh ledger run, then start one controller for that run:
+
+```elixir
+alias GenAgentServer.Control.Controller
+{:ok, controller} = Controller.start_link(instance: "review", ledger: ledger, run: run)
+{:ok, attempt} = Controller.submit(controller, "implementation", "smoke", spec)
+{:ok, snapshot} = Controller.status(controller)
+{:ok, snapshot} = Controller.result(controller) # same repeatable bounded projection
+Controller.cancel(controller, attempt) # {:ok, :requested}; inspect later acknowledgement
+```
+
+`spec` is the exact Ledger attempt specification shown below, with `kind: :work`
+and an inline `prompt`. Task checkout must match both the manifest and sanitized
+route cwd exactly; Echo describes cwd as nil because it has no filesystem
+backend, so its checkout remains only the manifest attestation. Provider and
+every supplied requested setting must match the route. Settings are assertions about configuration, not invocation overrides.
+Unknown actual model stays nil. Each task/stage accepts one submission: an exact
+route/spec repeat returns its existing attempt ID, changed input conflicts. There
+is no queue or automatic retry. The caller must use one controller per fresh run;
+concurrent controllers for a run are outside this increment's contract.
+
+The controller reserves a terminal ledger slot and full record byte ceiling before
+invoking. It monitors and calls the original Invocations PID and ledger PID;
+Invocations PID loss permanently fences new work and later completion delivery.
+Only `:admitting` and `:pending` execution become `:unobserved`; observed completed,
+failed, cancelled and admission-failed execution survive loss even when terminal
+evidence could not fit. It never attaches to a replacement instance with the same name.
+Ledger loss or a failed ledger call stops new work, while same-lifetime completion
+can still update bounded local execution, text byte count and digest. Its terminal
+stays unset with an explicit evidence error. Snapshots distinguish `owner_lost`
+from `ledger_unavailable`; the legacy `unavailable` summary retains only the first
+reason. Ledger call exits return `:ledger_unavailable`; a timeout records
+`:ledger_call_uncertain`, not proof of death. Only the ledger monitor establishes
+`:ledger_lost`. Neither condition automatically retries the uncertain ledger write.
+Invocations remains the sole Ensemble inbox consumer. Completion notifications
+are ingested immediately, preserving repeat reads after raw result eviction.
+The opt-in raw `recipient_ref` reference is echoed in completion metadata and
+stripped before Ensemble dispatch; it correlates admission/completion races.
+
+`limits:` may lower hard ceilings: `unfinished: 8`, `retained: 64`, `helpers: 8`,
+`helper_timeout_ms: 5_000`, `text_bytes: 4_096`. Monitored owned helpers keep
+controller reads responsive during raw admission/cancellation. Helper expiry or
+crash after starting admission is uncertainty, never a worker terminal or retry.
+Uncertain attempts and evidence failures still consume unfinished capacity.
+After uncertain admission, the invocation ID may remain unknown. Controller cancel
+then returns `:not_admitted` until a completion notification supplies the ID; this
+means the controller cannot target the invocation, not that cancellation is
+unsupported or execution never started. The caller may inspect raw Invocations
+outside the controller. No replay or attachment is attempted.
+Ledger unavailability also refuses new controller cancellation requests with
+`:ledger_unavailable`. A caller with a known invocation ID can explicitly cancel
+through the raw API; this does not restore ledger evidence.
+Cancellation is requested once; its acknowledgement is stored separately in
+`cancel`, and authoritative terminal evidence comes only from completion.
+A timeout never cancels work and cancellation never proves provider cleanup.
+
+Snapshots retain bounded terminal text, invocation/session IDs and failure text,
+without response events or arbitrary metadata. Nil and empty text remain distinct.
+Oversized/invalid text or terminal metadata that cannot fit the ledger reservation
+leaves the ledger attempt unfinished with an explicit `evidence_error`; available
+text byte count and SHA-256 remain in the controller snapshot. No excerpt is
+represented as full output. This may permanently block gates until the caller
+supplies appropriate evidence directly to the ledger. No controller recovery or
+resynchronization is provided. Bounds cover retained state, not transient raw
+messages, provider execution or total VM memory.
+
+The controller child is temporary. It kills its own helpers on shutdown and
+never stops the shared instance or ledger. Data is process-lifetime only. Existing
+revision/review/check/acceptance gates remain caller-driven through Ledger.
+Run `mix run examples/control_controller_echo.exs` for two independent Echo tasks,
+deduplicated submit and repeatable evidence after raw eviction. This is the first
+increment, not full #40 acceptance; Echo does not establish two real Claude/Codex
+workflow batches. Independent parent review and tests remain required for shipment.
+
 ### Optional evidence ledger (#40 foundation)
 
 `GenAgentServer.Control.Ledger` is caller-started, evidence-only storage. It
