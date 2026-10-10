@@ -190,9 +190,18 @@ defmodule GenAgentServer.Invocations do
   defp admit(agent, prompt, opts, state) do
     {source, route_opts} = Keyword.pop(opts, :source, :api)
     recipient = Keyword.get(opts, :recipient)
-    route_opts = Keyword.drop(route_opts, [:recipient])
+    recipient_ref = Keyword.get(opts, :recipient_ref)
+    route_opts = Keyword.drop(route_opts, [:recipient, :recipient_ref])
 
     cond do
+      not Enum.all?(Keyword.get_values(opts, :recipient_ref), &(is_nil(&1) or is_reference(&1))) ->
+        reject(
+          state,
+          agent,
+          if(source in @sources, do: source, else: :unknown),
+          :invalid_recipient_ref
+        )
+
       not Enum.all?(Keyword.get_values(opts, :recipient), &(is_nil(&1) or is_pid(&1))) ->
         reject(
           state,
@@ -233,6 +242,11 @@ defmodule GenAgentServer.Invocations do
               ensemble_token: token,
               source: source
             }
+
+            metadata =
+              if is_reference(recipient_ref),
+                do: Map.put(metadata, :recipient_ref, recipient_ref),
+                else: metadata
 
             state = %{
               state
