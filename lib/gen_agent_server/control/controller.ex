@@ -1,11 +1,14 @@
 defmodule GenAgentServer.Control.Controller do
   @moduledoc """
-  Optional caller-started first #40 increment for independent work stages.
+  Optional caller-started #40 controller for explicit work and review stages.
 
   Start with `instance: name, ledger: pid, run: run_id`. The caller owns one
   controller per fresh run, the configured instance and the ledger. Each
   task/stage is submitted once; identical submissions return the same ledger
-  attempt ID. No queue, retries, restart recovery, reviews or gate automation.
+  attempt ID. Reviews name a recorded Ledger revision and require an inline
+  prompt and an explicitly read-only Codex/Claude route (or login-free Echo).
+  Verdicts, verification and acceptance remain separate caller-owned records.
+  No queue, retries, restart recovery or gate automation.
   `status/1` and `result/1` return the same repeatable bounded snapshot.
 
   Limits may only be lowered: unfinished: 8, retained: 64, helpers: 8,
@@ -190,6 +193,8 @@ defmodule GenAgentServer.Control.Controller do
             a = %{
               task: task,
               stage: spec.stage,
+              kind: spec.kind,
+              subject_revision_id: Map.get(spec, :subject_revision_id),
               provider: spec.provider,
               requested_settings: spec.requested_settings,
               route: route,
@@ -234,7 +239,7 @@ defmodule GenAgentServer.Control.Controller do
     r = s.routes[route]
 
     cond do
-      spec.kind != :work or not Map.has_key?(spec, :prompt) ->
+      not Map.has_key?(spec, :prompt) ->
         {:error, :unsupported_attempt}
 
       t == nil ->
@@ -251,16 +256,37 @@ defmodule GenAgentServer.Control.Controller do
         {:error, :provider_mismatch}
 
       not Enum.all?(spec.requested_settings, fn {k, v} ->
-        Enum.any?(Map.drop(r, [:name, :provider, :cwd]), fn {rk, rv} ->
+        Enum.any?(Map.drop(r, [:name, :provider, :cwd, :review_read_only_explicit]), fn {rk, rv} ->
           Atom.to_string(rk) == k and setting(rv) == v
         end)
       end) ->
         {:error, :settings_mismatch}
 
+      spec.kind == :review and not review_route?(r) ->
+        {:error, :unsafe_review_route}
+
       true ->
         :ok
     end
   end
+
+  defp review_route?(%{provider: "echo"}), do: true
+
+  defp review_route?(%{
+         provider: "codex",
+         codex_sandbox: :read_only,
+         review_read_only_explicit: true
+       }),
+       do: true
+
+  defp review_route?(%{
+         provider: "claude",
+         claude_permission_mode: :read_only,
+         review_read_only_explicit: true
+       }),
+       do: true
+
+  defp review_route?(_), do: false
 
   defp setting(v) when is_atom(v) and not is_nil(v) and not is_boolean(v), do: Atom.to_string(v)
   defp setting(v), do: v

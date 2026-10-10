@@ -20,7 +20,10 @@ defmodule GenAgentServer.InstanceSpec do
   clients cannot supply modules, raw backend options, or pattern specs. Each
   route becomes a `GenAgentEnsemble.Agents.Simple` agent whose options come from
   `GenAgentServer.Providers.backend_opts/2`, so Claude uses a limited toolset
-  and Codex a read-only sandbox unless the route opts in. Atoms come from fixed
+  and Codex a read-only sandbox unless the route opts in. Route descriptions
+  include `review_read_only_explicit`, true only when a Claude/Codex route
+  explicitly configured its read-only mode, false otherwise. This provenance
+  field is not sent as a backend option. Atoms come from fixed
   lists, never from client strings.
 
   Route keys: `name`, `provider`, and, per provider, `model`, `effort`, `cwd`
@@ -126,12 +129,22 @@ defmodule GenAgentServer.InstanceSpec do
       description =
         %{name: name, provider: provider, model: model, effort: effort, cwd: cwd}
         |> Map.merge(Map.new(choices))
+        |> Map.put(:review_read_only_explicit, explicit_review_read_only?(provider, entry))
 
       {:ok, %{name: name, provider: provider, description: description, opts: opts(description)}}
     end
   end
 
   defp route(_entry, path, _top_cwd), do: invalid("#{path} must be an object")
+
+  # Preserve provider defaults while distinguishing explicit review access from omission.
+  defp explicit_review_read_only?("codex", entry),
+    do: entry["codex_sandbox"] == "read_only"
+
+  defp explicit_review_read_only?("claude", entry),
+    do: entry["claude_permission_mode"] == "read_only"
+
+  defp explicit_review_read_only?(_, _), do: false
 
   defp route_name(name, path) when is_binary(name) do
     if valid_name?(name),
