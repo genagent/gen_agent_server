@@ -300,7 +300,7 @@ the intended content, including untracked contents, rather than merely HEAD.
 The producer must be a completed work attempt for that task. Review requires a
 completed review attempt naming exactly that subject revision; verdicts are
 `:approve`, `:changes_requested` or `:unknown`. Verification records actual
-caller-executed argv (list), absolute cwd matching the task checkout, exit status
+caller-executed argv (list), absolute cwd equal to or within the task checkout, exit status
 (0..255 or nil when unavailable), and outcome (`:passed`, `:failed`, `:timed_out`,
 `:not_run`). Passed requires exit 0. Acceptance decisions are `:accepted` or
 `:rejected`. Accepting requires the current revision, no unfinished attempts for
@@ -313,6 +313,15 @@ Accepted status also requires the latest host acceptance to reference exactly th
 current review and required-check IDs. After a new pass or approving review,
 eligibility can return to true while accepted stays false until the caller records
 a new acceptance for that evidence set. Historical acceptances are never rewritten.
+
+Verification containment compares path components after lexical normalization
+(`Path.expand/1`) of both cwd and checkout. Package directories such as
+`/work/alpha/extensions/ensemble` are allowed under `/work/alpha`, including
+normalized inside paths containing `.` or `..`; relative paths, normalized escapes
+and sibling prefix collisions such as `/work/alpha-other` are rejected. The supplied
+cwd is retained unchanged as evidence. Paths need not exist; this performs no
+realpath or symlink resolution and grants no filesystem authorization. Stage
+attempts still require an exact match to the declared checkout string.
 
 Defaults are hard finite ceilings, configurable downward with `start_link(limits:
 keyword)`: `runs: 4`, `tasks_per_run: 8`, `attempts_per_run: 64`,
