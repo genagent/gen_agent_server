@@ -129,6 +129,32 @@ defmodule GenAgentServerTelemetryTest do
     refute Map.has_key?(metadata, :prompt)
   end
 
+  test "invalid recipient rejection keeps a private source out of telemetry" do
+    instance = GenAgentServer.session_name()
+
+    assert {:error, :invalid_recipient} =
+             GenAgentServer.invoke(instance, "echo", "private prompt",
+               source: "private unbounded source",
+               recipient: :invalid
+             )
+
+    assert_receive {:telemetry, [:gen_agent_server, :admission, :rejected], measurements,
+                    metadata}
+
+    assert %{system_time: system_time} = measurements
+    assert is_integer(system_time)
+    assert measurements == %{system_time: system_time}
+
+    assert metadata == %{
+             instance: instance,
+             agent: "echo",
+             source: :unknown,
+             reason: :invalid_recipient
+           }
+
+    refute_receive {:telemetry, [:gen_agent_server, :invocation, :start], _, _}, 0
+  end
+
   test "caller timeout is distinct from eventual invocation completion" do
     name = "telemetry-timeout-#{System.unique_integer([:positive])}"
 
