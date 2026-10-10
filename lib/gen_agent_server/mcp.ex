@@ -47,7 +47,7 @@ defmodule GenAgentServer.MCP do
 
   alias GenAgentServer.Ops
 
-  @tools ~w(instances agents status invoke result ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
+  @tools ~w(instances agents status invoke invocations result ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
 
   @doc "Names of the operations exposed over MCP."
   def tools, do: @tools

@@ -25,6 +25,7 @@ defmodule GenAgentServer.MCP.Server do
   tool(GenAgentServer.MCP.Tools.Agents)
   tool(GenAgentServer.MCP.Tools.Status)
   tool(GenAgentServer.MCP.Tools.Invoke)
+  tool(GenAgentServer.MCP.Tools.Invocations)
   tool(GenAgentServer.MCP.Tools.Result)
   tool(GenAgentServer.MCP.Tools.Ask)
   tool(GenAgentServer.MCP.Tools.CreateInstance)

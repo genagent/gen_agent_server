@@ -38,6 +38,38 @@ sessions. `mix gen_agent_server ask PROVIDER PROMPT`
 starts a fresh application for a single request; use IEx for a persistent
 multi-turn session.
 
+## Retained invocation summaries (issue #75, first increment)
+
+```elixir
+{:ok, summaries} = GenAgentServer.invocations("review", limit: 50)
+```
+
+The same read is available as Ops `invocations` (and the stdio MCP tool):
+
+```sh
+MIX_QUIET=1 mix gen_agent_server.ops invocations --instance review --limit 50 --remote
+```
+
+Instance is required; limit defaults to 50 and accepts integers from 1 to 200.
+Entries are ordered by newest admission, using a stable sequence even when
+wallclock timestamps tie. Fields are `id`, `route`, `source`, `status`,
+`admitted_at_unix_ms`, `completed_at_unix_ms`, `duration_ms`, and `error_category`.
+Statuses are pending, completed, failed, or cancelled. Pending completion time
+and duration are nil; terminal duration uses monotonic elapsed time and timestamps
+use Unix milliseconds. Error categories are limited to timeout, task_crashed,
+backend_error, and cancelled (nil for pending/success). No prompt, response,
+raw error reason, recipient, or backend configuration is included.
+Terminal timestamps and durations reflect the owner's first observation of
+completion, rather than the provider's finish time.
+
+Reads collect current completions from the invocation owner and are repeatable
+while entries remain retained. Limit bounds the returned list; existing
+`max_in_flight` and `max_results` bound storage. Eviction, instance shutdown, and
+restart discard corresponding summaries. Unknown/stopped instances return
+`instance_not_found`; a recreated instance begins empty. The Elixir API returns
+`invalid_limit` for invalid limits; Ops also validates argument types.
+This increment provides no dashboard; optional UI work for #75 remains open.
+
 ## Optional route suggestions (issue #22, first increment)
 
 `GenAgentServer.Selection.suggest/3` and `explain/3` return the same pure,
@@ -616,13 +648,13 @@ The running release can expose seven scoped tools to independent local clients
 at an authenticated `http://127.0.0.1:<port>/mcp` endpoint. Only explicitly
 allowed startup instances are reachable; clients cannot create instances or
 select directories through this surface. See [startup, security, and volatile
-semantics](docs/shared-mcp.md). The existing stdio catalogue still has 17 tools.
+semantics](docs/shared-mcp.md). The existing stdio catalogue still has 18 tools.
 
 ## MCP (stdio)
 
 `GenAgentServer.MCP` serves a local stdio MCP server for Claude, Codex, or any
-MCP client. It exposes seventeen tools, each backed by the operation of the same name
-in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `result`,
+MCP client. It exposes eighteen tools, each backed by the operation of the same name
+in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `invocations`, `result`,
 and `ask`, plus the lifecycle tools `create_instance`, `describe_instance`, and
 `stop_instance`, and the anonymous public GitHub read tools `public_revision`,
 `public_file`, `public_issues`, and `public_issue`, plus the opt-in external-peer tools

@@ -35,6 +35,31 @@ defmodule GenAgentServer.Invocations do
   @spec result(String.t(), String.t()) :: result()
   def result(name, id), do: call_instance(name, {:result, id})
 
+  def invocations(name, opts \\ []) do
+    cond do
+      not is_binary(name) or name == "" ->
+        {:error, :invalid_instance}
+
+      not is_list(opts) ->
+        {:error, :invalid_options}
+
+      not Keyword.keyword?(opts) ->
+        {:error, :invalid_options}
+
+      Enum.any?(Keyword.keys(opts), &(&1 != :limit)) ->
+        {:error, :invalid_options}
+
+      true ->
+        limit = Keyword.get(opts, :limit, 50)
+
+        if Enum.all?(Keyword.get_values(opts, :limit), &(is_integer(&1) and &1 > 0 and &1 <= 200)) do
+          call_instance(name, {:invocations, limit})
+        else
+          {:error, :invalid_limit}
+        end
+    end
+  end
+
   def cancel(name, id), do: call_instance(name, {:cancel, id})
 
   def via(name), do: {:via, Registry, {GenAgentServer.Registry, {:invocations, name}}}
@@ -77,6 +102,7 @@ defmodule GenAgentServer.Invocations do
                agents: MapSet.new(routes),
                strategy: strategy,
                description: Keyword.get(opts, :description),
+               admission_sequence: 0,
                pending: %{},
                by_token: %{},
                completed: %{},
@@ -137,11 +163,27 @@ defmodule GenAgentServer.Invocations do
         result =
           cond do
             Map.has_key?(state.pending, id) -> {:ok, :pending}
-            Map.has_key?(state.completed, id) -> Map.fetch!(state.completed, id)
+            Map.has_key?(state.completed, id) -> Map.fetch!(state.completed, id).result
             true -> {:error, :not_found}
           end
 
         {:reply, result, state}
+
+      {:error, reason} ->
+        {:stop, {:inbox_failed, reason}, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:invocations, limit}, _from, state) do
+    case collect_available(state) do
+      {:ok, state} ->
+        summaries =
+          (Map.values(state.pending) ++ Map.values(state.completed))
+          |> Enum.sort_by(& &1.sequence, :desc)
+          |> Enum.take(limit)
+          |> Enum.map(& &1.summary)
+
+        {:reply, {:ok, summaries}, state}
 
       {:error, reason} ->
         {:stop, {:inbox_failed, reason}, {:error, reason}, state}
@@ -234,6 +276,18 @@ defmodule GenAgentServer.Invocations do
                 Integer.to_string(System.unique_integer([:positive, :monotonic]))
 
             started_at_ms = System.monotonic_time(:millisecond)
+            sequence = state.admission_sequence + 1
+
+            summary = %{
+              id: id,
+              route: agent,
+              source: source,
+              status: :pending,
+              admitted_at_unix_ms: System.system_time(:millisecond),
+              completed_at_unix_ms: nil,
+              duration_ms: nil,
+              error_category: nil
+            }
 
             metadata = %{
               instance: state.name,
@@ -250,8 +304,11 @@ defmodule GenAgentServer.Invocations do
 
             state = %{
               state
-              | pending:
+              | admission_sequence: sequence,
+                pending:
                   Map.put(state.pending, id, %{
+                    summary: summary,
+                    sequence: sequence,
                     metadata: metadata,
                     started_at_ms: started_at_ms,
                     recipient: recipient
@@ -305,8 +362,8 @@ defmodule GenAgentServer.Invocations do
         state
 
       {id, by_token} ->
-        %{metadata: metadata, started_at_ms: started_at_ms, recipient: recipient} =
-          Map.fetch!(state.pending, id)
+        entry = Map.fetch!(state.pending, id)
+        %{metadata: metadata, started_at_ms: started_at_ms, recipient: recipient} = entry
 
         metadata =
           if outcome == {:error, :cancelled},
@@ -324,11 +381,28 @@ defmodule GenAgentServer.Invocations do
               {:ok, :failed, reason}
           end
 
+        {status, category} =
+          case outcome do
+            {:ok, _} -> {:completed, nil}
+            {:error, :cancelled} -> {:cancelled, :cancelled}
+            {:error, reason} -> {:failed, error_category(reason)}
+          end
+
+        summary = %{
+          entry.summary
+          | status: status,
+            completed_at_unix_ms: System.system_time(:millisecond),
+            duration_ms: max(0, System.monotonic_time(:millisecond) - started_at_ms),
+            error_category: category
+        }
+
+        retained = %{result: result, summary: summary, sequence: entry.sequence}
+
         state = %{
           state
           | by_token: by_token,
             pending: Map.delete(state.pending, id),
-            completed: Map.put(state.completed, id, result),
+            completed: Map.put(state.completed, id, retained),
             completion_order: :queue.in(id, state.completion_order)
         }
 
@@ -338,6 +412,11 @@ defmodule GenAgentServer.Invocations do
         evict_excess(state)
     end
   end
+
+  # Fixed categories only: arbitrary backend reasons must never enter a summary.
+  defp error_category(:timeout), do: :timeout
+  defp error_category({:task_crashed, _}), do: :task_crashed
+  defp error_category(_), do: :backend_error
 
   defp evict_excess(state) do
     if map_size(state.completed) > state.max_results do

@@ -126,6 +126,14 @@ defmodule GenAgentServer.MCP.Resources.Invocations do
   the bounded result store evicts them. `status` reports current in-flight
   work and queues, but it is not a replacement for reading a result.
 
+  To recover retained invocation IDs on this connection, call `invocations`
+  with an explicit `instance` and optional `limit` (default 50, maximum 200).
+  It lists pending and retained terminal summaries in newest-admission order,
+  without prompts, responses, or raw error reasons. Read `result` for an
+  individual outcome. Eviction and instance restart discard these summaries.
+  Completion timestamps and durations reflect when the owner observed the
+  completion, not a provider-supplied finish time.
+
   A provider response can include a provider session ID. It is not a server
   invocation ID and is not an address for sending messages to an existing
   native Claude or Codex UI session. Check code and test results yourself
@@ -186,8 +194,8 @@ defmodule GenAgentServer.MCP.Resources.Capabilities do
   @guide """
   # MCP capabilities and limits
 
-  This connection exposes seventeen tools: `instances`, `agents`, `status`,
-  `create_instance`, `describe_instance`, `stop_instance`, `ask`, `invoke`, and
+  This connection exposes eighteen tools: `instances`, `agents`, `status`,
+  `create_instance`, `describe_instance`, `stop_instance`, `ask`, `invoke`, `invocations`, and
   `result`, plus `public_revision`, `public_file`, `public_issues`, and
   `public_issue` for anonymous public GitHub reads, and `discover_peers`,
   `bind_peer`, `send_peer_message`, `peer_result` for opt-in existing Claude peers.

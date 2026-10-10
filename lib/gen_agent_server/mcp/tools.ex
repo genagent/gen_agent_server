@@ -141,6 +141,18 @@ defmodule GenAgentServer.MCP.Tools do
     def call(arguments, _context), do: GenAgentServer.MCP.run("invoke", arguments)
   end
 
+  defmodule Invocations do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "invocations",
+      description: "Read content-free retained invocation summaries, newest admission first."
+
+    input_schema(GenAgentServer.Ops.json_schema(elem(GenAgentServer.Ops.fetch("invocations"), 1)))
+
+    @impl true
+    def call(arguments, _context), do: GenAgentServer.MCP.run("invocations", arguments)
+  end
+
   defmodule Result do
     @moduledoc false
     use Snodo.Tool,

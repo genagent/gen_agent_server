@@ -132,7 +132,7 @@ defmodule GenAgentServer.SharedMCPTest do
     assert {:response, %{status: 404}} = Gate.check(%{request | path: "/mcp/other"}, config)
   end
 
-  test "shared discovery has seven tools and hides all resources; stdio keeps 17", c do
+  test "shared discovery has seven tools and hides all resources; stdio keeps 18", c do
     {:ok, tools} = Snodo.Client.list_tools(c.client)
     assert Enum.sort(Enum.map(tools, & &1["name"])) == Enum.sort(Shared.tools())
 
@@ -142,7 +142,7 @@ defmodule GenAgentServer.SharedMCPTest do
     end
 
     assert {:error, %{code: -32601}} = Snodo.Client.list_resources(c.client)
-    assert length(GenAgentServer.MCP.tools()) == 17
+    assert length(GenAgentServer.MCP.tools()) == 18
     assert %{"instances" => [name]} = ok!(c.client, "instances", %{})
     assert name == c.name
     {:ok, unauthorized} = Snodo.Client.direct(c.runtime)

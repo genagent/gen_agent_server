@@ -3,7 +3,7 @@
 The running release can host an opt-in Streamable HTTP endpoint at
 `http://127.0.0.1:<port>/mcp`. Independent clients share its existing instance
 owners, provider work and bounded volatile result stores. Stdio remains a
-separate VM per client and retains all 17 tools. Shared HTTP exposes exactly
+separate VM per client and retains all 18 tools. Shared HTTP exposes exactly
 seven: `instances`, `agents`, `status`, `describe_instance`, `invoke`, `result`,
 `ask`. The issue's original six-tool count is stale.
 
