@@ -11,6 +11,14 @@ defmodule GenAgentServer.Control.Controller do
   No queue, retries, restart recovery or gate automation.
   `status/1` and `result/1` return the same repeatable bounded snapshot.
 
+  Each admitted attempt exposes `timing`: `admitted_at_unix_ms` is wall-clock
+  Unix milliseconds after ledger admission; `terminal_observed_after_ms` is
+  nonnegative monotonic elapsed milliseconds to the first authoritative terminal
+  observation, including definite admission failure. This process-local duration
+  survives evidence failure, but remains nil on uncertainty or cancellation
+  acknowledgement alone. It measures admission-to-observation, not provider CPU
+  time or cost. Timing has no restart durability and is not ledger evidence.
+
   Limits may only be lowered: unfinished: 8, retained: 64, helpers: 8,
   helper_timeout_ms: 5_000, text_bytes: 4_096. Uncertainty and evidence failures
   continue to consume unfinished capacity. Helpers bound controller waiting,
@@ -98,7 +106,9 @@ defmodule GenAgentServer.Control.Controller do
   @impl true
   def handle_call(:snapshot, _, s) do
     attempts =
-      Map.new(s.attempts, fn {id, a} -> {id, Map.drop(a, [:spec, :ref, :completion_seen])} end)
+      Map.new(s.attempts, fn {id, a} ->
+        {id, Map.drop(a, [:spec, :ref, :completion_seen, :admitted_monotonic_ms])}
+      end)
 
     {:reply,
      {:ok,
@@ -184,6 +194,8 @@ defmodule GenAgentServer.Control.Controller do
       true ->
         case Ledger.record_attempt(s.ledger, s.run, task, spec, reserve_terminal: true) do
           {:ok, id} ->
+            admitted_at_unix_ms = System.system_time(:millisecond)
+            admitted_monotonic_ms = System.monotonic_time(:millisecond)
             task = :binary.copy(task)
             route = :binary.copy(route)
             spec = copy(spec)
@@ -200,6 +212,11 @@ defmodule GenAgentServer.Control.Controller do
               route: route,
               spec: spec,
               ref: ref,
+              admitted_monotonic_ms: admitted_monotonic_ms,
+              timing: %{
+                admitted_at_unix_ms: admitted_at_unix_ms,
+                terminal_observed_after_ms: nil
+              },
               execution: :admitting,
               invocation_id: nil,
               terminal: nil,
@@ -409,6 +426,7 @@ defmodule GenAgentServer.Control.Controller do
   end
 
   defp complete(s, id, {:ok, :completed, response}) when is_map(response) do
+    s = observe_terminal(s, id)
     text = Map.get(response, :text)
     a = s.attempts[id]
     bytes = if is_binary(text), do: byte_size(text), else: nil
@@ -464,6 +482,7 @@ defmodule GenAgentServer.Control.Controller do
   defp complete(s, id, _), do: evidence_error(s, id, :invalid_completion)
 
   defp finish(s, id, evidence) do
+    s = observe_terminal(s, id)
     s = put_attempt(s, id, %{s.attempts[id] | execution: evidence.status})
 
     if s.ledger_unavailable != nil do
@@ -479,6 +498,17 @@ defmodule GenAgentServer.Control.Controller do
         {:exit, reason} ->
           fence(evidence_error(s, id, :ledger_unavailable), ledger_call_reason(reason))
       end
+    end
+  end
+
+  defp observe_terminal(s, id) do
+    a = s.attempts[id]
+
+    if a.timing.terminal_observed_after_ms == nil do
+      elapsed = max(0, System.monotonic_time(:millisecond) - a.admitted_monotonic_ms)
+      put_attempt(s, id, %{a | timing: %{a.timing | terminal_observed_after_ms: elapsed}})
+    else
+      s
     end
   end
 
