@@ -244,6 +244,99 @@ Each `agents` entry has the same `{name, callback_module, backend_options}`
 shape as `config/runtime.exs`. Result IDs are meaningful only within their
 instance. All results and provider sessions remain process-local and volatile.
 
+### Optional evidence ledger (#40 foundation)
+
+`GenAgentServer.Control.Ledger` is caller-started, evidence-only storage. It
+does not dispatch work or run commands. Execution, permissions, admission and
+concurrency, deadlines, cancellation and cleanup remain raw/caller responsibilities.
+Recorded failures, timeouts and cancellation are caller attestations. Acceptance
+records never publish anything. Full #40 remains open, including orchestration
+and two paid mixed-provider batches; the Echo example does not satisfy those batches.
+
+```elixir
+alias GenAgentServer.Control.Ledger
+{:ok, ledger} = Ledger.start_link()
+{:ok, run} = Ledger.open(ledger, %{name: "change", control_revision: "caller-v1",
+  tasks: [%{name: "implementation", checkout: File.cwd!(), required_checks: ["test"]}]})
+{:ok, attempt} = Ledger.record_attempt(ledger, run, "implementation", %{
+  stage: "implement", kind: :work, provider: "echo", requested_settings: %{},
+  instruction_revision: "prompt-v1", checkout: File.cwd!(), prompt: "hello"})
+# Caller invokes via raw invoke(..., recipient: self()), then explicitly ingests:
+:ok = Ledger.finish_attempt(ledger, run, attempt, %{status: :completed, text: "echo: hello"})
+{:ok, snapshot} = Ledger.result(ledger, run) # repeatable; independent of raw eviction
+```
+
+Run `mix run examples/control_ledger_echo.exs` for a login-free example using the
+existing raw recipient protocol, overlapping named tasks, explicit recording,
+repeat reads and an assertion that evidence survives raw `max_results: 1` eviction.
+The caller receives notifications directly; no new inbox consumer is introduced.
+Caller scripts must project bounded evidence, handle raw admission failures and
+own their resource cleanup. The ledger neither receives nor truncates raw responses.
+
+Input maps have atom keys and reject unknown fields. The shapes above are required;
+an attempt takes exactly one of `prompt` or `prompt_ref` (an external artifact
+reference). `kind: :review` additionally requires `subject_revision_id`; work
+attempts omit it. Requested settings are a flat map with string keys and scalar
+string/integer/boolean/nil values. Revised specifications create separate attempt
+IDs. Terminal `status` is `:completed`, `:failed`, `:admission_failed`, `:timed_out`
+or `:cancelled`; optional fields are `text`, `actual_model`, `invocation_id`,
+`session_id`, string `failure` and string-list `artifact_refs`. Missing text is
+nil; present-empty text stays `""`. Unknown actual model remains nil, never the
+requested model. Whole `Response.events` and arbitrary metadata are rejected.
+Terminal evidence is immutable: exact normalized repeats are idempotent, different
+payloads conflict. `result/2` includes all attempts and append-ordered gate records.
+
+Each gate function takes `(ledger, run, record)` and returns `{:ok, record_id}`:
+
+| Function | Required record fields | Optional fields |
+| --- | --- | --- |
+| `record_revision` | `task`, `produced_by_attempt_id`, `content_sha256`, `recorded_by` | `base_commit`, `artifact_refs` |
+| `record_review` | `revision_id`, `review_attempt_id`, `verdict`, `recorded_by` | `excerpt` |
+| `record_verification` | `revision_id`, `check_name`, `argv`, `cwd`, `exit_status`, `outcome`, `recorded_by` | `output`, `artifact_refs` |
+| `record_acceptance` | `revision_id`, `decision`, `recorded_by` | `reason` |
+
+Revision fingerprints are caller-attested lowercase SHA-256 strings covering
+the intended content, including untracked contents, rather than merely HEAD.
+The producer must be a completed work attempt for that task. Review requires a
+completed review attempt naming exactly that subject revision; verdicts are
+`:approve`, `:changes_requested` or `:unknown`. Verification records actual
+caller-executed argv (list), absolute cwd matching the task checkout, exit status
+(0..255 or nil when unavailable), and outcome (`:passed`, `:failed`, `:timed_out`,
+`:not_run`). Passed requires exit 0. Acceptance decisions are `:accepted` or
+`:rejected`. Accepting requires the current revision, no unfinished attempts for
+that task, the latest review approving, and the latest record for every required
+check passing. The ledger stores those review/check IDs; callers cannot select an
+older pass. New revisions inherit no gates. Historical records remain immutable;
+`status/2` recomputes current eligibility and accepted status, so a later failed
+check blocks acceptance even when a historical acceptance remains readable.
+Accepted status also requires the latest host acceptance to reference exactly the
+current review and required-check IDs. After a new pass or approving review,
+eligibility can return to true while accepted stays false until the caller records
+a new acceptance for that evidence set. Historical acceptances are never rewritten.
+
+Defaults are hard finite ceilings, configurable downward with `start_link(limits:
+keyword)`: `runs: 4`, `tasks_per_run: 8`, `attempts_per_run: 64`,
+`records_per_run: 256`, `record_bytes: 65_536`, `total_bytes: 4_194_304`.
+The manifest, each attempt, each terminal and each gate consume one record;
+attempt admission reserves its terminal slot, included in reported record counts. Byte
+accounting sums Erlang external sizes of immutable record envelopes, including
+IDs; it bounds retained evidence, not total VM memory, projections or raw mailboxes.
+Strings are at most 4,096 bytes, except prompt/text/output/excerpt up to the record
+limit; lists have at most 32 entries and requested settings at most 16 pairs.
+`:infinity` is rejected. Storage exhaustion returns `{:error, :quota_exhausted}`;
+malformed fields return `{:error, :invalid_record}`. Terminal **byte** capacity is
+not reserved: a full byte budget or oversized finish preserves the unfinished
+attempt without erasing old state. Callers must budget byte room, retry with bounded
+evidence, or forget another eligible run to free overall bytes. Record-count
+exhaustion cannot consume an admitted attempt's reserved terminal slot.
+
+`close/2` stops new attempts/gates while permitting existing attempts to finish;
+`forget/2` removes only an entire closed run without unfinished attempts. There
+is no attempt eviction. Storage survives ordinary API caller death, but the linked
+starter follows normal OTP link rules. Caller-owned supervision may use the
+temporary child spec. Evidence lasts only while that ledger process lives; death
+loses it, and a fresh ledger cannot recover old IDs. No disk persistence or replay.
+
 Pattern instances use one external route while Ensemble owns their internal
 stages or workers. For example, a Pipeline can use the same invocation IDs
 and result store as a Switchboard instance:
