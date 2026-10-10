@@ -40,7 +40,8 @@ try do
         prompt: prompt
       }
 
-      {:ok, attempt} = Ledger.record_attempt(ledger, run, name, spec)
+      # Secure a bounded terminal record before the raw invocation side effect.
+      {:ok, attempt} = Ledger.record_attempt(ledger, run, name, spec, reserve_terminal: true)
       {:ok, invocation} = GenAgentServer.invoke(instance, name, prompt, recipient: self())
       {invocation, attempt}
     end)
@@ -63,6 +64,7 @@ try do
 
   {:ok, snapshot} = Ledger.result(ledger, run)
   {:ok, ^snapshot} = Ledger.result(ledger, run)
+  true = snapshot.reserved_bytes == 0
   raw = Enum.map(Map.keys(pending), &GenAgentServer.result(instance, &1))
   true = Enum.count(raw, &(&1 == {:error, :not_found})) == 1
   true = Enum.all?(snapshot.attempts, fn {_, a} -> a.terminal.text == "echo: hello #{a.task}" end)

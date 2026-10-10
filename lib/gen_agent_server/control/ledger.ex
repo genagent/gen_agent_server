@@ -13,8 +13,13 @@ defmodule GenAgentServer.Control.Ledger do
   its terminal record slot. Bytes are the sum of Erlang
   external sizes of these immutable records, not a bound on VM memory/mailboxes.
   No individual record is evicted. `forget` frees an entire closed run with no
-  unfinished attempts. Terminal byte capacity is NOT reserved: an oversized/full-store
-  finish rejects without changing old state; callers must submit bounded evidence.
+  unfinished attempts. `record_attempt/5` with `reserve_terminal: true` additionally
+  reserves the configured record byte ceiling before caller invocation. All writes
+  respect outstanding reservations across runs. A valid terminal within that ceiling
+  consumes its own reservation; rejection preserves it. Ordinary attempts reserve
+  no bytes and may fail to finish in a full store. `bytes` reports actual retained
+  charges; run/status `reserved_bytes` reports outstanding capacity separately.
+  Reserved attempts expose `reserved_bytes`, reset to zero on successful finish.
 
   Maps use atom keys and reject unknown keys, structs and arbitrary metadata.
   Strings are at most 4,096 bytes (prompt/text/output/excerpt up to the record byte limit).
@@ -63,8 +68,8 @@ defmodule GenAgentServer.Control.Ledger do
 
   def open(server, manifest), do: GenServer.call(server, {:open, manifest})
 
-  def record_attempt(server, run, task, spec),
-    do: GenServer.call(server, {:attempt, run, task, spec})
+  def record_attempt(server, run, task, spec, opts \\ []),
+    do: GenServer.call(server, {:attempt, run, task, spec, opts})
 
   def finish_attempt(server, run, attempt, evidence),
     do: GenServer.call(server, {:finish, run, attempt, evidence})
@@ -97,6 +102,7 @@ defmodule GenAgentServer.Control.Ledger do
          limits: Map.merge(@limits, Map.new(overrides)),
          runs: %{},
          bytes: 0,
+         reserved_bytes: 0,
          serial: 0,
          namespace: Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
        }}
@@ -127,6 +133,7 @@ defmodule GenAgentServer.Control.Ledger do
         records: [],
         current_revisions: %{},
         record_count: 0,
+        reserved_bytes: 0,
         bytes: 0
       }
 
@@ -157,8 +164,9 @@ defmodule GenAgentServer.Control.Ledger do
     end
   end
 
-  defp apply_request({:attempt, run_id, task, spec}, state) do
-    with {:ok, run} <- writable_run(state, run_id),
+  defp apply_request({:attempt, run_id, task, spec, opts}, state) do
+    with {:ok, reserve?} <- validate_attempt_opts(opts),
+         {:ok, run} <- writable_run(state, run_id),
          {:ok, task_spec} <- fetch_task(run, task),
          :ok <- validate_spec(spec, state.limits),
          :ok <- require_true(spec.checkout == task_spec.checkout, :checkout_mismatch),
@@ -168,7 +176,10 @@ defmodule GenAgentServer.Control.Ledger do
       {id, state} = next_id(state)
       attempt = %{id: id, kind: :attempt, task: task, spec: spec, terminal: nil}
 
-      with {:ok, run, state} <- charge(run, state, attempt, 2) do
+      reservation = if reserve?, do: state.limits.record_bytes, else: 0
+      attempt = if reserve?, do: Map.put(attempt, :reserved_bytes, reservation), else: attempt
+
+      with {:ok, run, state} <- charge(run, state, attempt, 2, reservation) do
         run = %{run | attempts: Map.put(run.attempts, id, copy(attempt))}
         {:ok, {:ok, id}, put_run(state, run)}
       end
@@ -192,7 +203,14 @@ defmodule GenAgentServer.Control.Ledger do
         true ->
           entry = %{kind: :terminal, attempt_id: id, data: evidence}
 
-          with {:ok, run, state} <- charge(run, state, entry, 0) do
+          reservation = Map.get(attempt, :reserved_bytes, 0)
+
+          with {:ok, run, state} <- charge(run, state, entry, 0, -reservation) do
+            attempt =
+              if Map.has_key?(attempt, :reserved_bytes),
+                do: %{attempt | reserved_bytes: 0},
+                else: attempt
+
             run = %{
               run
               | attempts: Map.put(run.attempts, id, %{attempt | terminal: copy(evidence)})
@@ -334,9 +352,18 @@ defmodule GenAgentServer.Control.Ledger do
       tasks: tasks,
       attempts: map_size(run.attempts),
       records: run.record_count,
-      bytes: run.bytes
+      bytes: run.bytes,
+      reserved_bytes: run.reserved_bytes
     }
   end
+
+  # Match only the two supported bounded shapes; never traverse caller option lists.
+  defp validate_attempt_opts([]), do: {:ok, false}
+
+  defp validate_attempt_opts([{:reserve_terminal, value}]) when is_boolean(value),
+    do: {:ok, value}
+
+  defp validate_attempt_opts(_), do: {:error, :invalid_options}
 
   defp validate_manifest(m, limits) do
     with :ok <- fields(m, [name: :string, control_revision: :string, tasks: :tasks], [], limits),
@@ -527,13 +554,21 @@ defmodule GenAgentServer.Control.Ledger do
 
   defp bounded_list?(_, _remaining), do: false
 
-  defp charge(run, state, entry, slots \\ 1) do
+  defp charge(run, state, entry, slots \\ 1, reservation_delta \\ 0) do
     bytes = :erlang.external_size(entry)
 
-    if bytes <= state.limits.record_bytes and state.bytes + bytes <= state.limits.total_bytes and
+    reserved_bytes = state.reserved_bytes + reservation_delta
+
+    if bytes <= state.limits.record_bytes and
+         state.bytes + bytes + reserved_bytes <= state.limits.total_bytes and
          run.record_count + slots <= state.limits.records_per_run do
-      {:ok, %{run | bytes: run.bytes + bytes, record_count: run.record_count + slots},
-       %{state | bytes: state.bytes + bytes}}
+      {:ok,
+       %{
+         run
+         | bytes: run.bytes + bytes,
+           record_count: run.record_count + slots,
+           reserved_bytes: run.reserved_bytes + reservation_delta
+       }, %{state | bytes: state.bytes + bytes, reserved_bytes: reserved_bytes}}
     else
       {:error, :quota_exhausted}
     end

@@ -88,6 +88,220 @@ defmodule GenAgentServer.Control.LedgerTest do
     })
   end
 
+  defp terminal_at_ceiling(id, ceiling) do
+    evidence = %{status: :completed, text: "", actual_model: nil}
+    overhead = :erlang.external_size(%{kind: :terminal, attempt_id: id, data: evidence})
+    %{evidence | text: String.duplicate("x", ceiling - overhead)}
+  end
+
+  defp admission_sizes(ceiling) do
+    # Fresh ledgers use a fixed-width namespace and serials 1 and 2.
+    id = String.duplicate("a", 24)
+    manifest_bytes = :erlang.external_size(%{id: id <> "/1", kind: :manifest, data: manifest()})
+
+    attempt = %{
+      id: id <> "/2",
+      kind: :attempt,
+      task: "alpha",
+      spec: spec(),
+      terminal: nil,
+      reserved_bytes: ceiling
+    }
+
+    {manifest_bytes, :erlang.external_size(attempt)}
+  end
+
+  test "reserved admission requires actual attempt plus full ceiling at the exact total boundary" do
+    ceiling = 1024
+    {manifest_bytes, attempt_bytes} = admission_sizes(ceiling)
+    total = manifest_bytes + attempt_bytes + ceiling
+
+    for {budget, outcome} <- [{total - 1, :reject}, {total, :admit}] do
+      l =
+        start_supervised!({Ledger, limits: [record_bytes: ceiling, total_bytes: budget]},
+          id: budget
+        )
+
+      run = open(l)
+      assert {:ok, before} = Ledger.result(l, run)
+
+      case outcome do
+        :reject ->
+          assert {:error, :quota_exhausted} =
+                   Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+
+          assert Ledger.result(l, run) == {:ok, before}
+
+        :admit ->
+          assert {:ok, id} =
+                   Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+
+          assert {:ok, pending} = Ledger.result(l, run)
+          assert pending.bytes == manifest_bytes + attempt_bytes
+          assert pending.reserved_bytes == ceiling
+          assert pending.record_count == 3
+          evidence = terminal_at_ceiling(id, ceiling)
+
+          assert :erlang.external_size(%{kind: :terminal, attempt_id: id, data: evidence}) ==
+                   ceiling
+
+          assert :ok = Ledger.finish_attempt(l, run, id, evidence)
+          assert {:ok, finished} = Ledger.result(l, run)
+          assert finished.bytes == total
+          assert finished.reserved_bytes == 0
+          assert finished.attempts[id].reserved_bytes == 0
+          assert finished.record_count == 3
+      end
+    end
+  end
+
+  test "reserved rejection is atomic, duplicates release once, and close permits finish" do
+    ceiling = 1024
+    l = ledger(record_bytes: ceiling, records_per_run: 5)
+    run = open(l)
+    assert {:ok, first} = Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+    assert {:ok, second} = Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+    assert {:error, :quota_exhausted} = Ledger.record_attempt(l, run, "alpha", spec())
+    assert :ok = Ledger.close(l, run)
+    assert {:error, :unfinished_attempts} = Ledger.forget(l, run)
+
+    assert {:error, :closed} =
+             Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+
+    assert {:ok, before} = Ledger.result(l, run)
+    exact = terminal_at_ceiling(first, ceiling)
+
+    for {evidence, reason} <- [
+          {%{status: :bogus}, :invalid_record},
+          {%{status: :completed, artifact_refs: ["x" | :tail]}, :invalid_record},
+          {%{exact | text: exact.text <> "x"}, :quota_exhausted}
+        ] do
+      assert {:error, ^reason} = Ledger.finish_attempt(l, run, first, evidence)
+      assert Ledger.result(l, run) == {:ok, before}
+    end
+
+    assert :ok = Ledger.finish_attempt(l, run, first, exact)
+    assert {:ok, after_first} = Ledger.result(l, run)
+    assert after_first.reserved_bytes == ceiling
+    assert after_first.attempts[second].reserved_bytes == ceiling
+    assert after_first.bytes == before.bytes + ceiling
+    assert :ok = Ledger.finish_attempt(l, run, first, exact)
+    assert {:error, :conflict} = Ledger.finish_attempt(l, run, first, %{status: :failed})
+    assert Ledger.result(l, run) == {:ok, after_first}
+    assert :ok = Ledger.finish_attempt(l, run, second, %{status: :cancelled})
+    assert {:ok, %{reserved_bytes: 0, records: 5}} = Ledger.status(l, run)
+    assert :ok = Ledger.forget(l, run)
+  end
+
+  test "option validation rejects malformed bounded and unbounded shapes without losing state" do
+    l = ledger()
+    run = open(l)
+    assert {:ok, _} = Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+    assert {:ok, before} = Ledger.result(l, run)
+
+    for opts <- [
+          nil,
+          true,
+          %{},
+          :reserve_terminal,
+          [true],
+          [{"reserve_terminal", true}],
+          [reserve_terminal: nil],
+          [reserve_terminal: 1],
+          [unknown: true],
+          [reserve_terminal: true, reserve_terminal: false],
+          [reserve_terminal: true, unknown: false],
+          [{:reserve_terminal, true} | :tail],
+          [{:reserve_terminal, true} | "tail"],
+          List.duplicate({:reserve_terminal, true}, 10_000)
+        ] do
+      assert {:error, :invalid_options} = Ledger.record_attempt(l, run, "alpha", spec(), opts)
+      assert Process.alive?(l)
+      assert Ledger.result(l, run) == {:ok, before}
+    end
+  end
+
+  test "ordinary arities and false option retain unreserved overflow behavior" do
+    l = ledger(record_bytes: 1024, total_bytes: 2000)
+    run = open(l)
+
+    for opts <- [:arity4, [], [reserve_terminal: false]] do
+      result =
+        if opts == :arity4,
+          do: Ledger.record_attempt(l, run, "alpha", spec()),
+          else: Ledger.record_attempt(l, run, "alpha", spec(), opts)
+
+      assert {:ok, id} = result
+      assert {:ok, pending} = Ledger.result(l, run)
+      refute Map.has_key?(pending.attempts[id], :reserved_bytes)
+      assert pending.reserved_bytes == 0
+    end
+
+    assert {:ok, before} = Ledger.result(l, run)
+    id = before.attempts |> Map.keys() |> hd()
+
+    assert {:error, :quota_exhausted} =
+             Ledger.finish_attempt(l, run, id, terminal_at_ceiling(id, 1024))
+
+    assert Ledger.result(l, run) == {:ok, before}
+  end
+
+  test "concurrent gates across runs respect reservations and forget reclaims only retained bytes" do
+    ceiling = 1024
+    budget = 7000
+    l = ledger(record_bytes: ceiling, total_bytes: budget)
+    first = open(l)
+    second = open(l)
+    rev = revision(l, second, completed(l, second))
+    assert {:ok, ordinary} = Ledger.record_attempt(l, second, "alpha", spec())
+    assert {:ok, a} = Ledger.record_attempt(l, first, "alpha", spec(), reserve_terminal: true)
+    assert {:ok, b} = Ledger.record_attempt(l, second, "alpha", spec(), reserve_terminal: true)
+
+    replies =
+      1..30
+      |> Task.async_stream(fn _ -> verify(l, second, rev) end, max_concurrency: 10)
+      |> Enum.map(fn {:ok, reply} -> reply end)
+
+    assert Enum.any?(replies, &match?({:ok, _}, &1))
+    assert Enum.any?(replies, &(&1 == {:error, :quota_exhausted}))
+    assert {:ok, first_before} = Ledger.result(l, first)
+    assert {:ok, second_before} = Ledger.result(l, second)
+    assert first_before.bytes + second_before.bytes + 2 * ceiling <= budget
+    assert first_before.reserved_bytes == ceiling
+    assert second_before.reserved_bytes == ceiling
+
+    # All admission paths must include the other run's reservation.
+    assert {:error, :quota_exhausted} =
+             Ledger.open(l, %{manifest() | name: String.duplicate("x", 500)})
+
+    assert {:error, :quota_exhausted} = Ledger.record_attempt(l, first, "alpha", spec())
+
+    assert {:error, :quota_exhausted} =
+             Ledger.record_attempt(l, first, "alpha", spec(), reserve_terminal: true)
+
+    assert {:error, :quota_exhausted} =
+             Ledger.finish_attempt(l, second, ordinary, terminal_at_ceiling(ordinary, ceiling))
+
+    assert Ledger.result(l, first) == {:ok, first_before}
+    assert Ledger.result(l, second) == {:ok, second_before}
+    assert :ok = Ledger.close(l, first)
+    assert :ok = Ledger.finish_attempt(l, first, a, terminal_at_ceiling(a, ceiling))
+    assert :ok = Ledger.forget(l, first)
+    assert Ledger.result(l, second) == {:ok, second_before}
+
+    # Reclaimed capacity admits a new run, while the second reservation survives.
+    replacement = open(l)
+    assert {:ok, replacement_snapshot} = Ledger.result(l, replacement)
+    assert replacement_snapshot.bytes + second_before.bytes + ceiling <= budget
+    assert :ok = Ledger.close(l, second)
+    assert :ok = Ledger.finish_attempt(l, second, b, terminal_at_ceiling(b, ceiling))
+    assert {:ok, finished} = Ledger.result(l, second)
+    assert finished.bytes == second_before.bytes + ceiling
+    assert finished.reserved_bytes == 0
+    assert :ok = Ledger.finish_attempt(l, second, ordinary, %{status: :cancelled})
+    assert :ok = Ledger.forget(l, second)
+  end
+
   test "multiple attempts append immutable specifications, once-only evidence and repeatable history" do
     l = ledger()
     run = open(l, ["alpha", "beta"])
