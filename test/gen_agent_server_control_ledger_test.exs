@@ -94,7 +94,7 @@ defmodule GenAgentServer.Control.LedgerTest do
     %{evidence | text: String.duplicate("x", ceiling - overhead)}
   end
 
-  defp admission_sizes(ceiling) do
+  defp admission_sizes(ceiling, declaration_spec) do
     # Fresh ledgers use a fixed-width namespace and serials 1 and 2.
     id = String.duplicate("a", 24)
     manifest_bytes = :erlang.external_size(%{id: id <> "/1", kind: :manifest, data: manifest()})
@@ -103,7 +103,7 @@ defmodule GenAgentServer.Control.LedgerTest do
       id: id <> "/2",
       kind: :attempt,
       task: "alpha",
-      spec: spec(),
+      spec: declaration_spec,
       terminal: nil,
       reserved_bytes: ceiling
     }
@@ -111,9 +111,103 @@ defmodule GenAgentServer.Control.LedgerTest do
     {manifest_bytes, :erlang.external_size(attempt)}
   end
 
+  test "expected_output is optional, exact, bounded UTF-8 for work and review" do
+    l = ledger()
+    run = open(l)
+    work = completed(l, run)
+    rev = revision(l, run, work)
+    assert {:ok, original} = Ledger.result(l, run)
+    refute Map.has_key?(original.attempts[work].spec, :expected_output)
+
+    for value <- ["x", String.duplicate("x", 4096), " é\n", String.duplicate("é", 2048)],
+        kind <- [:work, :review] do
+      changes = %{expected_output: value, kind: kind}
+      changes = if kind == :review, do: Map.put(changes, :subject_revision_id, rev), else: changes
+      declaration_spec = spec("alpha", changes)
+      assert :ok = Ledger.validate_attempt_spec(declaration_spec)
+      assert {:ok, id} = Ledger.record_attempt(l, run, "alpha", declaration_spec)
+      assert {:ok, stored} = Ledger.result(l, run)
+      assert stored.attempts[id].spec == declaration_spec
+      assert Ledger.result(l, run) == {:ok, stored}
+    end
+
+    ref_spec =
+      spec("alpha", %{expected_output: "artifact contents"})
+      |> Map.delete(:prompt)
+      |> Map.put(:prompt_ref, "artifact:caller")
+
+    assert {:ok, id} = Ledger.record_attempt(l, run, "alpha", ref_spec)
+    assert {:ok, stored} = Ledger.result(l, run)
+    assert stored.attempts[id].spec == ref_spec
+
+    assert {:error, :invalid_prompt} =
+             Ledger.record_attempt(l, run, "alpha", Map.put(ref_spec, :prompt, "x"))
+
+    assert {:error, :invalid_prompt} =
+             Ledger.record_attempt(l, run, "alpha", Map.delete(ref_spec, :prompt_ref))
+
+    for value <- [
+          String.duplicate("x", 4097),
+          String.duplicate("é", 2048) <> "x",
+          <<255>>,
+          "",
+          nil,
+          1,
+          :output,
+          [],
+          %{}
+        ],
+        kind <- [:work, :review] do
+      changes = %{expected_output: value, kind: kind}
+      changes = if kind == :review, do: Map.put(changes, :subject_revision_id, rev), else: changes
+      bad = spec("alpha", changes)
+      before = :sys.get_state(l)
+      assert {:error, :invalid_record} = Ledger.validate_attempt_spec(bad)
+
+      assert {:error, :invalid_record} =
+               Ledger.record_attempt(l, run, "alpha", bad, reserve_terminal: true)
+
+      assert :sys.get_state(l) == before
+    end
+
+    # Generic strings retain their existing binary validation contract.
+    assert :ok = Ledger.validate_attempt_spec(spec("alpha", %{instruction_revision: <<255>>}))
+  end
+
+  test "encoded declaration obeys the exact record ceiling and copies backing binaries" do
+    backing = String.duplicate("x", 100_000)
+    value = binary_part(backing, 100, 4096)
+    assert :binary.referenced_byte_size(value) > byte_size(value)
+    declaration_spec = spec("alpha", %{expected_output: value})
+    id = String.duplicate("a", 24) <> "/2"
+    entry = %{id: id, kind: :attempt, task: "alpha", spec: declaration_spec, terminal: nil}
+    ceiling = :erlang.external_size(entry)
+
+    for budget <- [ceiling - 1, ceiling] do
+      l = start_supervised!({Ledger, limits: [record_bytes: budget]}, id: budget)
+      run = open(l)
+      before = :sys.get_state(l)
+
+      if budget < ceiling do
+        assert {:error, :quota_exhausted} =
+                 Ledger.record_attempt(l, run, "alpha", declaration_spec)
+
+        assert :sys.get_state(l) == before
+      else
+        assert {:ok, attempt} = Ledger.record_attempt(l, run, "alpha", declaration_spec)
+        assert {:ok, stored} = Ledger.result(l, run)
+        assert stored.bytes == before.bytes + ceiling
+        retained = stored.attempts[attempt].spec.expected_output
+        assert retained == value
+        assert :binary.referenced_byte_size(retained) == byte_size(retained)
+      end
+    end
+  end
+
   test "reserved admission requires actual attempt plus full ceiling at the exact total boundary" do
     ceiling = 1024
-    {manifest_bytes, attempt_bytes} = admission_sizes(ceiling)
+    declaration_spec = spec("alpha", %{expected_output: " exact é output "})
+    {manifest_bytes, attempt_bytes} = admission_sizes(ceiling, declaration_spec)
     total = manifest_bytes + attempt_bytes + ceiling
 
     for {budget, outcome} <- [{total - 1, :reject}, {total, :admit}] do
@@ -128,13 +222,17 @@ defmodule GenAgentServer.Control.LedgerTest do
       case outcome do
         :reject ->
           assert {:error, :quota_exhausted} =
-                   Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+                   Ledger.record_attempt(l, run, "alpha", declaration_spec,
+                     reserve_terminal: true
+                   )
 
           assert Ledger.result(l, run) == {:ok, before}
 
         :admit ->
           assert {:ok, id} =
-                   Ledger.record_attempt(l, run, "alpha", spec(), reserve_terminal: true)
+                   Ledger.record_attempt(l, run, "alpha", declaration_spec,
+                     reserve_terminal: true
+                   )
 
           assert {:ok, pending} = Ledger.result(l, run)
           assert pending.bytes == manifest_bytes + attempt_bytes

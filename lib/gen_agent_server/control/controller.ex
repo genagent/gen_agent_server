@@ -10,6 +10,9 @@ defmodule GenAgentServer.Control.Controller do
   Verdicts, verification and acceptance remain separate caller-owned records.
   No queue, retries, restart recovery or gate automation.
   `status/1` and `result/1` return the same repeatable bounded snapshot.
+  Attempts expose the copied spec's optional `expected_output` string, or nil
+  when omitted. This caller-owned guidance never augments prompts or provider
+  options, validates output, or creates approval or acceptance records.
 
   Each admitted attempt exposes `timing`: `admitted_at_unix_ms` is wall-clock
   Unix milliseconds after ledger admission; `terminal_observed_after_ms` is
@@ -207,6 +210,7 @@ defmodule GenAgentServer.Control.Controller do
               stage: spec.stage,
               kind: spec.kind,
               subject_revision_id: Map.get(spec, :subject_revision_id),
+              expected_output: Map.get(spec, :expected_output),
               provider: spec.provider,
               requested_settings: spec.requested_settings,
               route: route,

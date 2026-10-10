@@ -392,8 +392,18 @@ The caller receives notifications directly; no new inbox consumer is introduced.
 Caller scripts must project bounded evidence, handle raw admission failures and
 own their resource cleanup. The ledger neither receives nor truncates raw responses.
 
-Input maps have atom keys and reject unknown fields. The shapes above are required;
-an attempt takes exactly one of `prompt` or `prompt_ref` (an external artifact
+Input maps have atom keys and reject unknown fields. The shapes above are required.
+Work and review attempt specs optionally accept atom-key `expected_output`: a valid
+UTF-8 string of 1..4,096 bytes, preserved exactly without trimming or normalization.
+Empty strings, nil, malformed UTF-8 and non-strings return `:invalid_record`.
+This is caller-declared acceptance guidance only: it does not augment prompts,
+change provider options, match or validate output, or create approval/acceptance
+records. Controller status/result expose the copied declaration as a string or nil
+when omitted; adding, removing or changing it conflicts for an existing task/stage.
+The full encoded attempt remains subject to Ledger record and total byte budgets,
+with rejection before invocation and unchanged terminal reservations.
+
+An attempt takes exactly one of `prompt` or `prompt_ref` (an external artifact
 reference). `kind: :review` additionally requires `subject_revision_id`; work
 attempts omit it. Requested settings are a flat map with string keys and scalar
 string/integer/boolean/nil values. Revised specifications create separate attempt

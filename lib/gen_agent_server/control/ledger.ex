@@ -32,6 +32,11 @@ defmodule GenAgentServer.Control.Ledger do
   example for input shapes. A missing terminal `text` becomes nil, whereas an
   explicitly empty text stays "". Unknown `actual_model` stays nil.
 
+  Work and review specs may declare `expected_output`: a valid UTF-8 binary of
+  1..4,096 bytes, retained exactly without trimming or normalization. This is
+  caller-owned acceptance guidance, not output matching or automatic acceptance.
+  The full encoded spec still consumes the normal record and total byte budgets.
+
   Attempts and gate records are immutable; every call creates a new ID except
   exact duplicate terminal evidence, which is idempotent. Revision fingerprints
   are caller-supplied lowercase SHA-256 strings covering the intended content.
@@ -396,7 +401,12 @@ defmodule GenAgentServer.Control.Ledger do
                instruction_revision: :string,
                checkout: :path
              ],
-             [prompt: :text, prompt_ref: :string, subject_revision_id: :string],
+             [
+               prompt: :text,
+               prompt_ref: :string,
+               subject_revision_id: :string,
+               expected_output: :expected_output
+             ],
              limits
            ),
          :ok <-
@@ -505,6 +515,10 @@ defmodule GenAgentServer.Control.Ledger do
   defp fields(_, _, _, _), do: {:error, :invalid_record}
 
   defp valid?(v, :string, _), do: is_binary(v) and byte_size(v) in 1..4096
+
+  defp valid?(v, :expected_output, _),
+    do: is_binary(v) and byte_size(v) in 1..4096 and String.valid?(v)
+
   defp valid?(v, :text, l), do: is_binary(v) and byte_size(v) <= l.record_bytes
   defp valid?(v, :nullable_text, l), do: v == nil or valid?(v, :text, l)
   defp valid?(v, :nullable_string, l), do: v == nil or valid?(v, :string, l)
