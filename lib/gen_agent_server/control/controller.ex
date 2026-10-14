@@ -529,8 +529,10 @@ defmodule GenAgentServer.Control.Controller do
   defp evidence_error(s, id, reason),
     do: put_attempt(s, id, %{s.attempts[id] | evidence_error: reason})
 
+  # Typed backend errors, including nested ones, are reduced to their coarse
+  # category by the shared presentation before the retained text is bounded.
   defp reason_text(reason),
-    do: inspect(reason, limit: 8, printable_limit: 256, width: 256) |> String.slice(0, 512)
+    do: reason |> GenAgentServer.Ops.error_text() |> String.slice(0, 512)
 
   defp bounded_reply({:ok, ack}) when ack in [:cancelled, :cancelled_unconfirmed], do: {:ok, ack}
   defp bounded_reply({:error, reason}), do: {:error, reason_text(reason)}
