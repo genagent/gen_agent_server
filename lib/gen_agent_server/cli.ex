@@ -137,7 +137,8 @@ defmodule GenAgentServer.CLI do
     "agent #{name} not found in instance #{instance}"
   end
 
-  def error_message(_args, reason), do: "GenAgent request failed: #{inspect(reason)}"
+  def error_message(_args, reason),
+    do: "GenAgent request failed: #{GenAgentServer.Ops.error_text(reason)}"
 
   # A response may contain more than one completed assistant message. Keep
   # Response.text intact for API consumers; use the explicit presentation

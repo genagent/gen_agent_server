@@ -8,7 +8,7 @@ defmodule GenAgentServer.Run do
   the run finishes, including on timeout.
   """
 
-  alias GenAgentServer.PatternSpec
+  alias GenAgentServer.{Ops, PatternSpec}
 
   @poll_ms 50
 
@@ -96,7 +96,11 @@ defmodule GenAgentServer.Run do
         Map.merge(base, %{id: id, status: :pending, elapsed_ms: 0})
 
       {:error, reason} ->
-        Map.merge(base, %{status: :rejected, error: inspect(reason), elapsed_ms: now() - started})
+        Map.merge(base, %{
+          status: :rejected,
+          error: Ops.error_text(reason),
+          elapsed_ms: now() - started
+        })
     end
   end
 
@@ -129,10 +133,10 @@ defmodule GenAgentServer.Run do
         |> stamp(started)
 
       {:ok, :failed, reason} ->
-        %{item | status: :failed, error: inspect(reason)} |> stamp(started)
+        %{item | status: :failed, error: Ops.error_text(reason)} |> stamp(started)
 
       {:error, reason} ->
-        %{item | status: :failed, error: inspect(reason)} |> stamp(started)
+        %{item | status: :failed, error: Ops.error_text(reason)} |> stamp(started)
     end
   end
 

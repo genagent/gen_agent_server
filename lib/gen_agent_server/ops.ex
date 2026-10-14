@@ -486,16 +486,118 @@ defmodule GenAgentServer.Ops do
 
   defp error(code, message), do: %{code: Atom.to_string(code), message: message}
 
-  @doc false
-  def normalize(reason) when is_atom(reason), do: error(reason, Atom.to_string(reason))
+  # Coarse `GenAgent.Backend.Error` kinds that may appear in public output.
+  # The kind of a typed error is open-ended (adapters derive it from legacy
+  # tuple tags), so anything outside this list is reported as `:unclassified`.
+  @backend_error_kinds ~w(rate_limited authentication invalid_request server_error http_error
+                          transport provider_error conversation_lost invalid_response timeout)a
 
-  def normalize({:invalid_config, detail}) when is_binary(detail),
+  # `GenAgent.Backend.Error` retains provider bodies, headers, and message text
+  # in `:raw` and `:message`. Public presentation reports only the allowlisted
+  # kind and `:retryable?`; direct Elixir callers still receive the full struct.
+  # The struct is matched as a tagged map so this module compiles against cores
+  # that do not define it.
+  @doc false
+  def normalize(%{__struct__: GenAgent.Backend.Error} = reason),
+    do: error(:backend_error, backend_error_message(reason))
+
+  def normalize(reason), do: reason |> redact_backend_errors() |> present()
+
+  @doc """
+  Single-string presentation of a failure reason for public output.
+
+  Used where a result carries its error as one string (`GenAgentServer.Run`
+  items). A typed backend error becomes its coarse category. Any other reason
+  keeps its plain `inspect/1` text, with nested typed errors replaced first.
+  """
+  @spec error_text(term()) :: String.t()
+  def error_text(%{__struct__: GenAgent.Backend.Error} = reason),
+    do: backend_error_message(reason)
+
+  def error_text(reason), do: reason |> redact_backend_errors() |> inspect()
+
+  defp present(reason) when is_atom(reason), do: error(reason, Atom.to_string(reason))
+
+  defp present({:invalid_config, detail}) when is_binary(detail),
     do: error(:invalid_config, detail)
 
-  def normalize({kind, detail}) when is_atom(kind),
+  defp present({kind, detail}) when is_atom(kind),
     do: error(kind, "#{kind}: #{inspect(detail, printable_limit: 500)}")
 
-  def normalize(reason), do: error(:error, inspect(reason, printable_limit: 500))
+  defp present(reason), do: error(:error, inspect(reason, printable_limit: 500))
+
+  defp backend_error_message(error) do
+    kind = Map.get(error, :kind)
+    kind = if kind in @backend_error_kinds, do: kind, else: :unclassified
+    retry = if Map.get(error, :retryable?) == true, do: " (retryable)", else: ""
+    "backend_error: #{kind}#{retry}"
+  end
+
+  # Replaces typed errors nested inside framework wrappers (stage tuples,
+  # lists, maps) with a fixed marker before generic inspection. Nothing is
+  # called and no atoms are made. A typed error is replaced as soon as it is
+  # reached; its `:raw` is never traversed.
+  #
+  # The walk is bounded by fixed limits. A container that is deeper than
+  # @redact_depth, or larger than the remaining @redact_nodes budget, is
+  # replaced whole by @redacted rather than copied or left unexamined. Terms
+  # within the limits come back unchanged unless they hold a typed error.
+  @redact_depth 16
+  @redact_nodes 1_000
+  @redacted "<redacted>"
+
+  defp redact_backend_errors(reason), do: reason |> redact(0, @redact_nodes) |> elem(0)
+
+  defp redact(%{__struct__: GenAgent.Backend.Error} = reason, _depth, left) do
+    kind = Map.get(reason, :kind)
+    {{:backend_error, if(kind in @backend_error_kinds, do: kind, else: :unclassified)}, left}
+  end
+
+  defp redact(map, depth, left) when is_map(map) do
+    size = map_size(map)
+
+    if depth >= @redact_depth or size > left do
+      {@redacted, left}
+    else
+      {pairs, left} =
+        Enum.map_reduce(:maps.to_list(map), left - size, fn {key, value}, left ->
+          {key, left} = redact(key, depth + 1, left)
+          {value, left} = redact(value, depth + 1, left)
+          {{key, value}, left}
+        end)
+
+      {Map.new(pairs), left}
+    end
+  end
+
+  defp redact(tuple, depth, left) when is_tuple(tuple) do
+    size = tuple_size(tuple)
+
+    if depth >= @redact_depth or size > left do
+      {@redacted, left}
+    else
+      {elements, left} =
+        Enum.map_reduce(Tuple.to_list(tuple), left - size, &redact(&1, depth + 1, &2))
+
+      {List.to_tuple(elements), left}
+    end
+  end
+
+  defp redact([_ | _] = list, depth, left) do
+    if depth >= @redact_depth, do: {@redacted, left}, else: redact_list(list, depth, left)
+  end
+
+  defp redact(term, _depth, left), do: {term, left}
+
+  # List cells share the list's depth; each cell costs one node.
+  defp redact_list([head | tail], depth, left) when left > 0 do
+    {head, left} = redact(head, depth + 1, left - 1)
+    {tail, left} = redact_list(tail, depth, left)
+    {[head | tail], left}
+  end
+
+  defp redact_list([_ | _], _depth, left), do: {@redacted, left}
+  defp redact_list(tail, depth, left), do: redact(tail, depth + 1, left)
 
   @doc "Convert a term to JSON-safe data: atoms become strings, tuples lists."
   def jsonable(nil), do: nil
@@ -503,6 +605,8 @@ defmodule GenAgentServer.Ops do
 
   def jsonable(v) when is_atom(v),
     do: v |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
+
+  def jsonable(%{__struct__: GenAgent.Backend.Error} = e), do: backend_error_message(e)
 
   def jsonable(%_{} = struct), do: struct |> Map.from_struct() |> jsonable()
 
