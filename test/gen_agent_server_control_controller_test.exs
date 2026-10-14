@@ -748,6 +748,126 @@ defmodule GenAgentServer.Control.ControllerTest do
     refute_receive {:tell, _, _, "hello", _}, 0
   end
 
+  # Typed backend errors are built as tagged maps so these tests do not depend on
+  # constructing a core-specific struct.
+  @sentinels ~w(SENTINEL_RAW_BODY SENTINEL_MESSAGE SENTINEL_STATUS SENTINEL_KIND sentinel_kind)
+
+  defp typed(changes \\ %{}) do
+    Map.merge(
+      %{
+        __struct__: GenAgent.Backend.Error,
+        provider: :anthropic,
+        kind: :rate_limited,
+        retryable?: true,
+        status: "SENTINEL_STATUS",
+        message: "SENTINEL_MESSAGE",
+        raw: %{body: "SENTINEL_RAW_BODY"}
+      },
+      changes
+    )
+  end
+
+  defp refute_leak(term) do
+    text = inspect(term, limit: :infinity, printable_limit: :infinity)
+    for sentinel <- @sentinels, do: refute(text =~ sentinel, "#{sentinel} leaked into #{text}")
+    term
+  end
+
+  # Everything the controller and ledger retain for the run, as one term.
+  defp retained(c, l, run) do
+    {:ok, snapshot} = Controller.status(c)
+    {:ok, stored} = Ledger.result(l, run)
+    {snapshot, stored, :sys.get_state(c)}
+  end
+
+  test "typed and nested backend failures are coarse in controller and ledger evidence" do
+    {n, e, _} = gated()
+    tasks = ["a", "b", "c", "d", "e", "f", "g"]
+    {l, run} = ledger(tasks)
+    c = controller(n, l, run)
+
+    cases = [
+      {typed(), "backend_error: rate_limited (retryable)"},
+      {{:stage, typed(%{retryable?: false})}, "{:stage, {:backend_error, :rate_limited}}"},
+      {[typed(%{kind: :timeout})], "[backend_error: :timeout]"},
+      {%{wrapped: {:wrap, typed()}}, "%{wrapped: {:wrap, {:backend_error, :rate_limited}}}"},
+      {typed(%{kind: :sentinel_kind, retryable?: false}), "backend_error: unclassified"},
+      {typed(%{kind: "SENTINEL_KIND", retryable?: false}), "backend_error: unclassified"},
+      {:isolated_failure, ":isolated_failure"}
+    ]
+
+    for {task, {reason, expected}} <- Enum.zip(tasks, cases) do
+      {:ok, id} = Controller.submit(c, task, "worker", spec(task))
+      assert_receive {:tell, _, token, _, _}
+      inv = eventually(fn -> attempt(c, id).invocation_id end)
+      :ok = GenServer.call(e, {:entries, [{token, {:error, reason}}]})
+      terminal = finished(c, id)
+      assert terminal.status == :failed
+      assert terminal.failure == expected
+      # Direct Elixir callers still receive the raw reason.
+      assert GenAgentServer.result(n, inv) == {:ok, :failed, reason}
+      assert {:ok, stored} = Ledger.result(l, run)
+      assert stored.attempts[id].terminal == terminal
+      refute_leak(retained(c, l, run))
+    end
+  end
+
+  test "an over-long failure reason stays within the final 512-character bound" do
+    {n, e, _} = gated()
+    {l, run} = ledger(["a"])
+    c = controller(n, l, run)
+    {:ok, id} = Controller.submit(c, "a", "worker", spec())
+    assert_receive {:tell, _, token, _, _}
+    reason = {:detail, String.duplicate("x", 5000)}
+    :ok = GenServer.call(e, {:entries, [{token, {:error, reason}}]})
+    failure = finished(c, id).failure
+    assert String.starts_with?(failure, "{:detail, \"xxx")
+    assert String.length(failure) <= 512
+  end
+
+  test "typed admission rejection is coarse; the raw rejection stays available" do
+    {n, e, _} = gated()
+    :ok = GenServer.call(e, {:hold, true})
+    {l, run} = ledger(["a"])
+    c = controller(n, l, run)
+    {:ok, a} = Controller.submit(c, "a", "worker", spec())
+    assert_receive {:tell, from, _, "hello", _}
+    GenServer.reply(from, {:error, typed()})
+    terminal = finished(c, a)
+    assert terminal.status == :admission_failed
+    assert terminal.failure == "backend_error: rate_limited (retryable)"
+    assert {:ok, stored} = Ledger.result(l, run)
+    assert stored.attempts[a].terminal == terminal
+    refute_leak(retained(c, l, run))
+
+    raw = typed()
+    task = Task.async(fn -> GenAgentServer.invoke(n, "worker", "raw") end)
+    assert_receive {:tell, raw_from, _, "raw", _}
+    GenServer.reply(raw_from, {:error, raw})
+    assert Task.await(task) == {:error, raw}
+  end
+
+  test "typed cancellation acknowledgement failure is coarse and the terminal is unaffected" do
+    {n, e, _} = gated()
+    {l, run} = ledger(["a"])
+    c = controller(n, l, run)
+    {:ok, a} = Controller.submit(c, "a", "worker", spec())
+    assert_receive {:tell, _, token, _, _}
+    eventually(fn -> attempt(c, a).invocation_id end)
+    assert Controller.cancel(c, a) == {:ok, :requested}
+    assert_receive {:cancel_called, from, ^token}
+    GenServer.reply(from, {:error, typed()})
+    eventually(fn -> attempt(c, a).cancel != :requested end)
+    expected = {:error, "backend_error: rate_limited (retryable)"}
+    assert attempt(c, a).cancel == expected
+    assert attempt(c, a).terminal == nil
+    assert Controller.cancel(c, a) == {:ok, expected}
+    refute_leak(retained(c, l, run))
+    :ok = GenServer.call(e, {:entries, [{token, {:ok, %{text: "completion"}}}]})
+    assert finished(c, a).text == "completion"
+    refute_leak(retained(c, l, run))
+  end
+
   test "held cancellation acknowledgement is separate; terminal wins late completion" do
     {n, e, owner} = gated()
     {l, run} = ledger(["a"])

@@ -27,15 +27,28 @@ defmodule GenAgentServer.Instance do
     strategy = Keyword.get(opts, :strategy, GenAgentEnsemble.Strategies.Switchboard)
     strategy_opts = Keyword.get(opts, :strategy_opts, agents: agents)
     routes = Keyword.get(opts, :routes, Enum.map(agents, &elem(&1, 0)))
+    max_in_flight = Keyword.get(opts, :max_in_flight, 16)
+
+    # The invocation owner drains Ensemble's inbox. Retain every outcome that
+    # can arrive between collections, even for direct callers above 100.
+    # Invalid limits remain the invocation owner's existing validation error.
+    max_completed_results =
+      if is_integer(max_in_flight) and max_in_flight > 0,
+        do: max(100, max_in_flight),
+        else: 100
 
     children = [
-      {GenAgentEnsemble.Server, name: name, strategy: strategy, opts: strategy_opts},
+      {GenAgentEnsemble.Server,
+       name: name,
+       strategy: strategy,
+       opts: strategy_opts,
+       max_completed_results: max_completed_results},
       {GenAgentServer.Invocations,
        name: name,
        agents: agents,
        routes: routes,
        strategy: strategy,
-       max_in_flight: Keyword.get(opts, :max_in_flight, 16),
+       max_in_flight: max_in_flight,
        max_results: Keyword.get(opts, :max_results, 100),
        description: Keyword.get(opts, :description),
        poll_interval_ms: Keyword.get(opts, :poll_interval_ms, 100)}

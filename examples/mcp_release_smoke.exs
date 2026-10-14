@@ -36,6 +36,10 @@ try do
     )
 
   try do
+    unless legacy.session.server_info["version"] ==
+             to_string(Application.spec(:gen_agent_server, :vsn)),
+           do: raise("MCP initialize does not match the packaged server version")
+
     unless legacy.session.instructions =~ "gen-agent://guide/index",
       do: raise("MCP legacy initialize instructions are missing")
 
@@ -132,6 +136,14 @@ try do
 
   unless described["structuredContent"] == data,
     do: raise("describe_instance differs from creation: #{inspect(described)}")
+
+  status = call.("status", %{"instance" => "pm"})
+
+  unless get_in(status, ["structuredContent", "member_names"]) == %{
+           "one" => ["GenAgentEnsemble", "pm", "one"],
+           "two" => ["GenAgentEnsemble", "pm", "two"]
+         },
+         do: raise("published Ensemble member names are not JSON-safe: #{inspect(status)}")
 
   duplicate = call.("create_instance", %{"instance" => "pm", "config" => config})
 

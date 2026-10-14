@@ -216,11 +216,12 @@ completed result text only the last agent message, which is useful when Codex
 emits commentary before a final structured answer. Text events are still
 preserved. Static profiles and pattern specs accept the same choices.
 
-Until this adapter option is released, this server pins the core and Codex
-integration to immutable source revision
-`b251a1321242edea1c895f76e0a16d38c357dc53` in `mix.exs` and `mix.lock`.
-No published adapter version provides this option yet; replacing the source
-pin requires a release that includes it.
+The server uses published Hex packages: core `~> 0.8.0`, Ensemble `~> 0.7.0`,
+Claude adapter `~> 0.3.0`, and Codex adapter `~> 0.6.0`. The Codex adapter
+includes `response_text`; no Git dependency pins or core override are needed.
+Each owned Ensemble retains at least `max_in_flight` unread completions until
+the invocation owner collects them. The server's `max_results` separately
+bounds retained results after collection.
 
 ## Optional scheduled turns
 
