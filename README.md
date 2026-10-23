@@ -68,7 +68,10 @@ while entries remain retained. Limit bounds the returned list; existing
 restart discard corresponding summaries. Unknown/stopped instances return
 `instance_not_found`; a recreated instance begins empty. The Elixir API returns
 `invalid_limit` for invalid limits; Ops also validates argument types.
-This increment provides no dashboard; optional UI work for #75 remains open.
+An opt-in, read-only web observer for one running release, its allowlisted
+instances and these summaries is in [examples/operator_view](examples/operator_view/README.md).
+It is a separate Mix project: the server application and release gain no
+Phoenix dependency and open no listener for it. Broader #75 work remains open.
 
 ## Optional route suggestions (issue #22, first increment)
 
