@@ -21,5 +21,6 @@ defmodule GenAgentServer.MCP.Shared.Server do
   tool(GenAgentServer.MCP.Shared.Tools.DescribeInstance)
   tool(GenAgentServer.MCP.Shared.Tools.Invoke)
   tool(GenAgentServer.MCP.Shared.Tools.Result)
+  tool(GenAgentServer.MCP.Shared.Tools.Cancel)
   tool(GenAgentServer.MCP.Shared.Tools.Ask)
 end

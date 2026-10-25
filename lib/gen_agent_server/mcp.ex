@@ -3,7 +3,7 @@ defmodule GenAgentServer.MCP do
   Local stdio MCP adapter over `GenAgentServer.Ops`.
 
   The catalogue is an allowlist: `instances`, `agents`, `status`, `invoke`,
-  `result`, `ask`, and the lifecycle tools `create_instance`,
+  `result`, `cancel`, `ask`, and the lifecycle tools `create_instance`,
   `describe_instance`, and `stop_instance`, plus read-only public GitHub
   source tools `public_revision`, `public_file`, `public_issues`, and `public_issue`.
   Opt-in external peer tools are `discover_peers`, `bind_peer`,
@@ -47,7 +47,7 @@ defmodule GenAgentServer.MCP do
 
   alias GenAgentServer.Ops
 
-  @tools ~w(instances agents status invoke invocations result ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
+  @tools ~w(instances agents status invoke invocations result cancel ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
 
   @doc "Names of the operations exposed over MCP."
   def tools, do: @tools

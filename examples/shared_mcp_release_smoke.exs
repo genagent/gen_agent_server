@@ -19,7 +19,7 @@ defmodule SharedMCPReleaseSmoke do
 
         try do
           {:ok, tools} = Snodo.Client.list_tools(first)
-          expected = ~w(agents ask describe_instance instances invoke result status)
+          expected = ~w(agents ask cancel describe_instance instances invoke result status)
 
           unless Enum.sort(Enum.map(tools, & &1["name"])) == expected,
             do: raise("wrong shared catalogue")

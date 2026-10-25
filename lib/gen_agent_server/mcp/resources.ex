@@ -134,6 +134,14 @@ defmodule GenAgentServer.MCP.Resources.Invocations do
   Completion timestamps and durations reflect when the owner observed the
   completion, not a provider-supplied finish time.
 
+  To cancel, call `cancel` with both the exact `instance` and invocation `id`.
+  It returns that pair and status `cancelled` or `cancelled_unconfirmed`.
+  Neither proves provider cleanup. Retained results remain `failed` with error
+  code `cancelled`. A retained terminal ID returns `already_finished`; unknown,
+  evicted, wrong-instance or previous-generation IDs return `not_found`.
+  Unsupported strategies leave work pending. There are no automatic retries;
+  after a lost acknowledgement, inspect `result` with the same pair.
+
   A provider response can include a provider session ID. It is not a server
   invocation ID and is not an address for sending messages to an existing
   native Claude or Codex UI session. Check code and test results yourself
@@ -194,19 +202,19 @@ defmodule GenAgentServer.MCP.Resources.Capabilities do
   @guide """
   # MCP capabilities and limits
 
-  This connection exposes eighteen tools: `instances`, `agents`, `status`,
-  `create_instance`, `describe_instance`, `stop_instance`, `ask`, `invoke`, `invocations`, and
-  `result`, plus `public_revision`, `public_file`, `public_issues`, and
+  This connection exposes nineteen tools: `instances`, `agents`, `status`,
+  `create_instance`, `describe_instance`, `stop_instance`, `ask`, `invoke`, `invocations`,
+  `result`, and `cancel`, plus `public_revision`, `public_file`, `public_issues`, and
   `public_issue` for anonymous public GitHub reads, and `discover_peers`,
   `bind_peer`, `send_peer_message`, `peer_result` for opt-in existing Claude peers.
-  `create_instance`, `stop_instance`, `ask`, `invoke`, `bind_peer`, and
+  `create_instance`, `stop_instance`, `ask`, `invoke`, `cancel`, `bind_peer`, and
   `send_peer_message` change runtime state or start work. Tool schemas specify accepted arguments.
 
   The server also has Elixir and CLI operations for scheduled jobs and
   Ensemble patterns. This MCP adapter does not expose `jobs`, `run_job`,
   `patterns`, or `run_pattern`; reading this guide does not make them callable.
   Server-owned invocations have no durable results. Peers have a separate optional
-  operator-configured ledger. This connection does not offer cancellation, cross-client sharing,
+  operator-configured ledger. This connection does not offer cross-client sharing,
   dynamic schedule edits, general Codex native-session messaging, or a dashboard. Do not
   infer those capabilities from the underlying OTP or wrapper libraries.
 
