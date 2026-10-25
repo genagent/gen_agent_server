@@ -59,6 +59,34 @@ defmodule GenAgentServer.Examples.ControlIssueBatchTest do
     }
   end
 
+  # Registry removes a dead owner's entry asynchronously; close/1 promises only
+  # stopped processes. Wait briefly, then return what remains.
+  defp registered_after_close(instance, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 1000
+
+    case Registry.lookup(GenAgentServer.Registry, {:instance, instance}) do
+      [] ->
+        []
+
+      entries ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          entries
+        else
+          Process.sleep(5)
+          registered_after_close(instance, deadline)
+        end
+    end
+  end
+
+  defp assert_closed(ctx) do
+    assert %{controller: :ok, run: :ok, instance: :ok, ledger: :ok} = Batch.close(ctx)
+    refute Process.alive?(ctx.controller)
+    refute Process.alive?(ctx.ledger)
+    refute Process.alive?(ctx.instance_pid)
+    assert registered_after_close(ctx.instance) == []
+    assert %{controller: :already_stopped, ledger: :already_stopped} = Batch.close(ctx)
+  end
+
   setup do
     {:ok, ctx} = Batch.start(name(), config(), manifest())
     on_exit(fn -> Batch.close(ctx) end)
@@ -206,12 +234,19 @@ defmodule GenAgentServer.Examples.ControlIssueBatchTest do
   end
 
   test "explicit cleanup stops owned resources and is repeatable", %{ctx: ctx} do
-    assert %{controller: :ok, run: :ok, instance: :ok, ledger: :ok} = Batch.close(ctx)
-    refute Process.alive?(ctx.controller)
-    refute Process.alive?(ctx.ledger)
-    refute Process.alive?(ctx.instance_pid)
-    assert Registry.lookup(GenAgentServer.Registry, {:instance, ctx.instance}) == []
-    assert %{controller: :already_stopped, ledger: :already_stopped} = Batch.close(ctx)
+    assert_closed(ctx)
+  end
+
+  test "repeated start and cleanup deregisters each instance within the bound" do
+    for _ <- 1..50 do
+      {:ok, ctx} = Batch.start(name(), config(), manifest())
+
+      try do
+        assert_closed(ctx)
+      after
+        Batch.close(ctx)
+      end
+    end
   end
 
   test "partial startup cleans the instance and never takes ownership of an existing one", %{
@@ -222,7 +257,7 @@ defmodule GenAgentServer.Examples.ControlIssueBatchTest do
     assert {:error, %{startup: {:error, :invalid_record}, cleanup: %{instance: :ok, ledger: :ok}}} =
              Batch.start(instance, config(), %{})
 
-    assert Registry.lookup(GenAgentServer.Registry, {:instance, instance}) == []
+    assert registered_after_close(instance) == []
     assert {:error, _} = Batch.start(ctx.instance, config(), manifest())
     assert Process.alive?(ctx.instance_pid)
     assert Process.alive?(ctx.controller)
