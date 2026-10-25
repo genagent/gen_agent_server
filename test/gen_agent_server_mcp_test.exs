@@ -10,7 +10,7 @@ defmodule GenAgentServer.MCPTest do
   @tool_names Enum.sort(
                 @legacy_tool_names ++
                   @lifecycle_tool_names ++
-                  @source_tool_names ++ @peer_tool_names ++ ["invocations"]
+                  @source_tool_names ++ @peer_tool_names ++ ["invocations", "cancel"]
               )
 
   setup do

@@ -55,7 +55,7 @@ try do
   names = Enum.map(tools, & &1["name"]) |> Enum.sort()
 
   expected =
-    ~w(agents ask bind_peer create_instance describe_instance discover_peers instances invocations invoke peer_result public_file public_issue public_issues public_revision result send_peer_message status stop_instance)
+    ~w(agents ask bind_peer cancel create_instance describe_instance discover_peers instances invocations invoke peer_result public_file public_issue public_issues public_revision result send_peer_message status stop_instance)
 
   unless names == expected, do: raise("wrong MCP catalogue: #{inspect(names)}")
 
@@ -89,6 +89,18 @@ try do
 
   unless result && result["text"] == "echo: repeat" && read.() == result,
     do: raise("MCP result was not repeatable: #{inspect(result)}")
+
+  {:ok, cancelled} =
+    Snodo.Client.call_tool(client, "cancel", %{
+      "instance" => invoked["structuredContent"]["instance"],
+      "id" => id
+    })
+
+  unless cancelled["isError"] and
+           Enum.any?(cancelled["content"], &String.contains?(&1["text"], "already_finished")),
+         do: raise("MCP cancel did not preserve the retained terminal result")
+
+  unless read.() == result, do: raise("MCP cancel changed a completed result")
 
   summary_args = %{"instance" => invoked["structuredContent"]["instance"], "limit" => 1}
 

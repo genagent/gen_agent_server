@@ -5,7 +5,7 @@ defmodule GenAgentServer.MCP.Shared do
   """
   use Supervisor
   alias GenAgentServer.Ops
-  @tools ~w(instances agents status describe_instance invoke result ask)
+  @tools ~w(instances agents status describe_instance invoke result cancel ask)
   def tools, do: @tools
 
   def start_link(config), do: Supervisor.start_link(__MODULE__, config, name: __MODULE__)

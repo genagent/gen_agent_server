@@ -264,7 +264,7 @@ path.
 An admission rejection or prompt-file read failure has no invocation ID;
 inspect Quantum job telemetry for that run. Admission rejections also emit
 the server's usual rejection event with `source: :scheduler`. Turns with a known
-invocation ID can be cancelled through the Elixir API below. Start with read-only
+invocation ID can be cancelled through Ops, remote CLI, MCP, or the Elixir API below. Start with read-only
 jobs and review their results.
 
 `invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
@@ -290,10 +290,25 @@ GenAgentServer.cancel("review", id)
 Cancellation collects existing completions first. A retained terminal ID returns
 `{:error, :already_finished}`; unknown, evicted, wrong-instance or previous-generation
 IDs return `{:error, :not_found}`, and a missing instance returns
-`{:error, :instance_not_found}`. Older Ensemble releases without `cancel/2` and
-custom strategies without cancellation support return `{:error, :unsupported}`
+`{:error, :instance_not_found}`. Custom strategies without cancellation support return `{:error, :unsupported}`
 and leave work pending. Results retain the existing shape: cancellation is
 `{:ok, :failed, :cancelled}` and reads remain repeatable until eviction.
+
+The canonical `cancel` operation requires both a nonempty exact `instance` and
+`id`; it never selects the default instance or retries. All adapters return
+`instance`, `id`, and `status` (`cancelled` or `cancelled_unconfirmed`).
+Errors retain `not_found`, `already_finished`, `instance_not_found`, and
+`unsupported`. Retained results still report `failed` with error code `cancelled`.
+A lost acknowledgement is uncertain: read `result` with the same pair instead
+of automatically retrying. Acknowledgement does not prove provider cleanup.
+
+```sh
+mix gen_agent_server.ops cancel --instance review --id "$ID" --remote
+mix gen_agent_server.remote --instance review cancel "$ID"
+```
+
+Both stdio and shared MCP accept `cancel` with `{"instance":"review","id":"..."}`.
+Shared MCP requires its bearer token and an allowed instance for cancellation.
 
 Recipient must be a PID or nil; invalid values are rejected before admission.
 Recipient options are consumed by the server and never forwarded to Ensemble or
@@ -305,8 +320,11 @@ attempts one send before result eviction. Metadata includes `instance`, `agent`,
 that result is subsequently evicted in the same batch. There is no durable
 delivery, dead-recipient receipt or instance-shutdown notification guarantee.
 
-Cancellation is synchronous and can block the invocation owner for potentially
-unbounded time, delaying invoke/result/cancel calls. Its acknowledgement covers
+Cancellation is synchronous for the invocation owner; a slow child acknowledgement
+can delay its invoke/result/cancel calls. Ensemble 0.7.4 keeps its control loop
+responsive during child admission and cancellation (dependency #221). The server
+requires Ensemble >=0.7.4 and its compatible core >=0.10.0 and adapters
+Claude >=0.3.2 / Codex >=0.6.2. Its acknowledgement covers
 request cancellation, not external provider process settlement. Finalization
 releases raw admission capacity while unrelated work continues. The owner remains
 the sole Ensemble inbox consumer; do not drain its managed session directly.
@@ -648,17 +666,17 @@ The release's `rpc` command remains available for direct Elixir calls.
 
 ## Shared local MCP (opt-in HTTP)
 
-The running release can expose seven scoped tools to independent local clients
+The running release can expose eight scoped tools to independent local clients
 at an authenticated `http://127.0.0.1:<port>/mcp` endpoint. Only explicitly
 allowed startup instances are reachable; clients cannot create instances or
 select directories through this surface. See [startup, security, and volatile
-semantics](docs/shared-mcp.md). The existing stdio catalogue still has 18 tools.
+semantics](docs/shared-mcp.md). The existing stdio catalogue still has 19 tools.
 
 ## MCP (stdio)
 
 `GenAgentServer.MCP` serves a local stdio MCP server for Claude, Codex, or any
-MCP client. It exposes eighteen tools, each backed by the operation of the same name
-in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `invocations`, `result`,
+MCP client. It exposes nineteen tools, each backed by the operation of the same name
+in `GenAgentServer.Ops`: `instances`, `agents`, `status`, `invoke`, `invocations`, `result`, `cancel`,
 and `ask`, plus the lifecycle tools `create_instance`, `describe_instance`, and
 `stop_instance`, and the anonymous public GitHub read tools `public_revision`,
 `public_file`, `public_issues`, and `public_issue`, plus the opt-in external-peer tools
@@ -912,10 +930,9 @@ An `ask` timeout or caller exit does not establish that an underlying provider
 process stopped; GenAgent's turn watchdog bounds active work. There is no
 durable admission, automatic retry, or cross-node result store yet.
 
-The app has repeatable result reads for multiple clients. The stdio MCP
-surface exposes only submit, wait, and read operations. Individual turn
-cancellation remains to be defined in Ensemble before it is exposed over MCP or
-used for broader unattended orchestration.
+The app has repeatable result reads for multiple clients. Stdio and shared local
+MCP expose explicit invocation cancellation with the exact instance and ID.
+Cancellation acknowledgement does not establish provider process cleanup.
 
 ## Telemetry
 

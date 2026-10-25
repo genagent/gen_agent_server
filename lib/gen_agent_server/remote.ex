@@ -5,6 +5,10 @@ defmodule GenAgentServer.Remote do
   @ask_timeout_ms 3_600_000
 
   @doc false
+  def expression(["--instance", instance, "cancel", id]) do
+    GenAgentServer.Ops.Remote.expression("cancel", %{"instance" => instance, "id" => id})
+  end
+
   def expression(args) when is_list(args) do
     encoded_args = inspect(args, limit: :infinity, printable_limit: :infinity)
     "GenAgentServer.CLI.remote_main(#{encoded_args})"
@@ -12,10 +16,29 @@ defmodule GenAgentServer.Remote do
 
   @doc false
   def decode_response(output) when is_binary(output) do
-    case Jason.decode(String.trim(output)) do
-      {:ok, %{"ok" => text}} when is_binary(text) -> {:ok, text}
-      {:ok, %{"error" => message}} when is_binary(message) -> {:error, message}
-      _ -> {:error, :invalid_response}
+    output = String.trim(output)
+
+    decoded =
+      case Jason.decode(output) do
+        {:error, _} -> output |> String.split("\n") |> List.last() |> Jason.decode()
+        result -> result
+      end
+
+    case decoded do
+      {:ok, %{"ok" => true, "data" => data}} ->
+        {:ok, Jason.encode!(data)}
+
+      {:ok, %{"ok" => false, "error" => %{"code" => code, "message" => message}}} ->
+        {:error, "#{code}: #{message}"}
+
+      {:ok, %{"ok" => text}} when is_binary(text) ->
+        {:ok, text}
+
+      {:ok, %{"error" => message}} when is_binary(message) ->
+        {:error, message}
+
+      _ ->
+        {:error, :invalid_response}
     end
   end
 

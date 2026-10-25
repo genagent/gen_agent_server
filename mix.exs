@@ -17,10 +17,10 @@ defmodule GenAgentServer.MixProject do
 
   defp deps do
     [
-      {:gen_agent, "~> 0.8.0"},
-      {:gen_agent_ensemble, "~> 0.7.0"},
-      {:gen_agent_claude, "~> 0.3.0"},
-      {:gen_agent_codex, "~> 0.6.0"},
+      {:gen_agent, "~> 0.10.0"},
+      {:gen_agent_ensemble, "~> 0.7.4"},
+      {:gen_agent_claude, "~> 0.3.2"},
+      {:gen_agent_codex, "~> 0.6.2"},
       {:jason, "~> 1.4"},
       {:quantum, "~> 3.5"},
       {:snodo, "~> 0.4.1"},

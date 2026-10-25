@@ -96,6 +96,19 @@ defmodule GenAgentServer.MCP.Shared.Tools do
     def call(args, context), do: GenAgentServer.MCP.Shared.run("result", args, context)
   end
 
+  defmodule Cancel do
+    @moduledoc false
+    use Snodo.Tool,
+      name: "cancel",
+      description:
+        "Cancel one invocation without retrying. Acknowledgement does not prove provider cleanup."
+
+    input_schema(GenAgentServer.Ops.json_schema(elem(GenAgentServer.Ops.fetch("cancel"), 1)))
+
+    @impl true
+    def call(args, context), do: GenAgentServer.MCP.Shared.run("cancel", args, context)
+  end
+
   defmodule Ask do
     @moduledoc false
     use Snodo.Tool,

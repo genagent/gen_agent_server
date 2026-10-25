@@ -9,7 +9,7 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
 
     if args == [] do
       Mix.raise(
-        "usage: mix gen_agent_server.remote instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+        "usage: mix gen_agent_server.remote instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID | --instance NAME cancel ID"
       )
     end
 
@@ -54,6 +54,10 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
   defp timeout_message("invoke"),
     do:
       "server invoke RPC timed out before an ID was returned; check server logs before retrying to avoid duplicate work, or increase GEN_AGENT_SERVER_RPC_TIMEOUT_MS"
+
+  defp timeout_message("cancel"),
+    do:
+      "server cancel RPC timed out; inspect result with the same instance and ID; cancellation acknowledgement is unknown; do not retry automatically"
 
   defp timeout_message("result"),
     do:

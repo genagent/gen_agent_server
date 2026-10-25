@@ -3,9 +3,9 @@
 The running release can host an opt-in Streamable HTTP endpoint at
 `http://127.0.0.1:<port>/mcp`. Independent clients share its existing instance
 owners, provider work and bounded volatile result stores. Stdio remains a
-separate VM per client and retains all 18 tools. Shared HTTP exposes exactly
-seven: `instances`, `agents`, `status`, `describe_instance`, `invoke`, `result`,
-`ask`. The issue's original six-tool count is stale.
+separate VM per client and retains all 19 tools. Shared HTTP exposes exactly
+eight: `instances`, `agents`, `status`, `describe_instance`, `invoke`, `result`,
+`ask`, `cancel`.
 
 ## Startup
 
@@ -101,6 +101,17 @@ public multi-tenant deployment or a generic reverse-proxy target.
 `instance`, `id`, and `status` even when still pending. Completed/failed replies
 include the same pair. Use `invoke` then `result` for long work. Shared `ask`
 has these semantics independently of the existing stdio `ask` behavior.
+
+`cancel` requires the exact allowed `instance` and invocation `id`, using the
+same bearer gate and scope checks as submission and result reads. It returns
+`instance`, `id`, and `status`: `cancelled` or `cancelled_unconfirmed`. Neither
+acknowledgement proves provider cleanup. A retained terminal ID returns
+`already_finished`; unknown, evicted, wrong-instance and previous-generation
+IDs return `not_found`. Results remain repeatable as `failed` with error code
+`cancelled`. There are no automatic retries; after a lost acknowledgement,
+inspect `result` with the same pair. Unsupported strategies stay pending.
+Ensemble >=0.7.4 supplies responsive controls during child cancellation (#221);
+the invocation owner still waits synchronously for acknowledgement.
 
 ## Volatile work and failure
 

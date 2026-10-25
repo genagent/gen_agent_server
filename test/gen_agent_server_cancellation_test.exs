@@ -131,7 +131,11 @@ defmodule GenAgentServerCancellationTest do
       {name, ensemble, owner} = fixture()
       :ok = GenServer.call(ensemble, {:mode, ack})
       {id, token, _} = invoke(name, recipient: self(), source: :mcp)
-      assert {:ok, ^ack} = GenAgentServer.cancel(name, id)
+
+      assert {:ok, %{instance: ^name, id: ^id, status: status}} =
+               GenAgentServer.Ops.call("cancel", %{"instance" => name, "id" => id})
+
+      assert status == Atom.to_string(ack)
       assert_receive {:cancel_called, ^token}
       assert_receive {:gen_agent_server, :completion, metadata, {:ok, :failed, :cancelled}}
 

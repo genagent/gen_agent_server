@@ -10,6 +10,43 @@ defmodule GenAgentServer.RemoteTest do
     %{dir: dir}
   end
 
+  test "cancel envelopes tolerate preceding release logs without changing acknowledgements or errors" do
+    for status <- ["cancelled", "cancelled_unconfirmed"] do
+      data = %{"instance" => "review", "id" => "inv-test", "status" => status}
+      envelope = Jason.encode!(%{"ok" => true, "data" => data})
+
+      for prefix <- ["", "release log\nsecond log\n"] do
+        assert {:ok, json} = Remote.decode_response(prefix <> envelope <> "\n")
+        assert Jason.decode!(json) == data
+      end
+    end
+
+    for code <- ["not_found", "already_finished"] do
+      envelope = Jason.encode!(%{"ok" => false, "error" => %{"code" => code, "message" => code}})
+      expected = "#{code}: #{code}"
+      assert {:error, ^expected} = Remote.decode_response(envelope)
+      assert {:error, ^expected} = Remote.decode_response("release log\n" <> envelope <> "\n")
+    end
+  end
+
+  test "legacy remote text, errors and invalid responses keep their shapes" do
+    for pretty <- [false, true] do
+      assert {:ok, "echo: first\nsecond"} =
+               Remote.decode_response(
+                 Jason.encode!(%{"ok" => "echo: first\nsecond"}, pretty: pretty)
+               )
+
+      assert {:error, "invocation missing"} =
+               Remote.decode_response(
+                 Jason.encode!(%{"error" => "invocation missing"}, pretty: pretty)
+               )
+    end
+
+    for output <- ["", "release log\nnot JSON\n", ~s({"ok":false})] do
+      assert {:error, :invalid_response} = Remote.decode_response(output)
+    end
+  end
+
   test "a slow RPC within its configured bound succeeds", %{dir: dir} do
     release = script(dir, "slow", "sleep 0.1\nprintf 'ready\\n'")
     assert {"ready\n", 0} = Remote.run(release, ["status"], timeout_ms: 1_000)
@@ -80,6 +117,17 @@ defmodule GenAgentServer.RemoteTest do
       assert_raise Mix.Error, ~r/server invoke RPC timed out before an ID was returned/, fn ->
         Mix.Tasks.GenAgentServer.Remote.run(["invoke", "codex", "prompt"])
       end
+
+      assert_raise Mix.Error,
+                   ~r/cancellation acknowledgement is unknown; do not retry automatically/,
+                   fn ->
+                     Mix.Tasks.GenAgentServer.Remote.run([
+                       "--instance",
+                       "work",
+                       "cancel",
+                       "inv-test"
+                     ])
+                   end
     after
       restore_env("GEN_AGENT_SERVER_RELEASE_BIN", old_release)
       restore_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", old_timeout)

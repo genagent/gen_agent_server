@@ -76,6 +76,19 @@ defmodule GenAgentServer.Ops do
         end
       ),
       op(
+        "cancel",
+        "Cancel one invocation without retrying. Acknowledgement does not prove provider cleanup.",
+        true,
+        [
+          req("instance", :string, "Exact instance name"),
+          req("id", :string, "Exact invocation ID")
+        ],
+        fn a ->
+          with {:ok, ack} <- GenAgentServer.cancel(a["instance"], a["id"]),
+               do: {:ok, %{instance: a["instance"], id: a["id"], status: Atom.to_string(ack)}}
+        end
+      ),
+      op(
         "result",
         "Read an invocation result. Repeatable until evicted.",
         false,

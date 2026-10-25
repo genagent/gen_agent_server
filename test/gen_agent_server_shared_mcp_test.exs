@@ -132,7 +132,7 @@ defmodule GenAgentServer.SharedMCPTest do
     assert {:response, %{status: 404}} = Gate.check(%{request | path: "/mcp/other"}, config)
   end
 
-  test "shared discovery has seven tools and hides all resources; stdio keeps 18", c do
+  test "shared discovery has eight tools and hides all resources; stdio keeps 19", c do
     {:ok, tools} = Snodo.Client.list_tools(c.client)
     assert Enum.sort(Enum.map(tools, & &1["name"])) == Enum.sort(Shared.tools())
 
@@ -142,7 +142,7 @@ defmodule GenAgentServer.SharedMCPTest do
     end
 
     assert {:error, %{code: -32601}} = Snodo.Client.list_resources(c.client)
-    assert length(GenAgentServer.MCP.tools()) == 18
+    assert length(GenAgentServer.MCP.tools()) == 19
     assert %{"instances" => [name]} = ok!(c.client, "instances", %{})
     assert name == c.name
     {:ok, unauthorized} = Snodo.Client.direct(c.runtime)
@@ -180,6 +180,48 @@ defmodule GenAgentServer.SharedMCPTest do
     assert %{"agents" => ["blocked", "echo"]} = ok!(c.client, "agents", %{"instance" => c.name})
     assert %{"instance" => _} = ok!(c.client, "describe_instance", %{"instance" => c.name})
     assert %{"instance" => _} = ok!(c.client, "status", %{"instance" => c.name})
+  end
+
+  test "cancel requires trusted auth and allowed instance, and retains results across clients",
+       c do
+    %{"id" => id} =
+      ok!(c.client, "invoke", %{
+        "instance" => c.name,
+        "agent" => "blocked",
+        "prompt" => "cancel me"
+      })
+
+    assert_receive {:provider_started, _, "cancel me"}
+    args = %{"instance" => c.name, "id" => id}
+    {:ok, unauthorized} = Snodo.Client.direct(c.runtime)
+    assert {:error, %{code: -32003}} = Snodo.Client.call_tool(unauthorized, "cancel", args)
+
+    {:ok, forged} =
+      Snodo.Client.direct(c.runtime, auth: %{shared_mcp: true, instances: ["other"]})
+
+    assert {:error, %{code: -32003}} = Snodo.Client.call_tool(forged, "cancel", args)
+
+    for denied <- [
+          Map.delete(args, "instance"),
+          %{args | "instance" => GenAgentServer.session_name()}
+        ] do
+      assert {:error, %{code: -32003}} = Snodo.Client.call_tool(c.client, "cancel", denied)
+    end
+
+    assert {:ok, :pending} = GenAgentServer.result(c.name, id)
+    assert error!(c.client, "cancel", Map.put(args, "auth", c.auth)) =~ "invalid_args"
+    assert error!(c.client, "cancel", %{args | "id" => "unknown"}) =~ "not_found"
+    {:ok, second} = Snodo.Client.direct(c.runtime, auth: c.auth)
+
+    assert %{"instance" => instance, "id" => ^id, "status" => "cancelled"} =
+             ok!(second, "cancel", args)
+
+    assert instance == c.name
+    assert error!(c.client, "cancel", args) =~ "already_finished"
+    result = ok!(c.client, "result", args)
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "cancelled"
+    assert result == ok!(second, "result", args)
   end
 
   test "ask is bounded before admission and returns a repeatable pending ID", c do
