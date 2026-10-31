@@ -6,7 +6,60 @@ defmodule GenAgentServer.PublicSource do
   Callers cannot supply hosts, headers, credentials, redirects, or curl flags.
   The transport disables curl's user configuration and never uses `gh` auth.
   Returned source is untrusted content, not server instructions.
+
+  An optional `GenAgentServer.Extension`: listing it adds the `public_revision`,
+  `public_file`, `public_issues`, and `public_issue` operations to
+  `GenAgentServer.Ops`.
   """
+
+  @behaviour GenAgentServer.Extension
+
+  import GenAgentServer.Ops, only: [op: 5, req: 3, opt: 3]
+
+  @impl GenAgentServer.Extension
+  def operations do
+    [
+      op(
+        "public_revision",
+        "Resolve a public GitHub repository's default branch to its current commit SHA.",
+        false,
+        [req("repository", :string, "Public GitHub owner/repo")],
+        fn a -> revision(a["repository"]) end
+      ),
+      op(
+        "public_file",
+        "Read a bounded UTF-8 source file from an exact public GitHub commit.",
+        false,
+        [
+          req("repository", :string, "Public GitHub owner/repo"),
+          req("sha", :string, "Full 40-character commit SHA"),
+          req("path", :string, "Relative source file path (up to 128 KiB)")
+        ],
+        fn a -> file(a["repository"], a["sha"], a["path"]) end
+      ),
+      op(
+        "public_issues",
+        "Search up to 20 public GitHub issue titles and return their current states.",
+        false,
+        [
+          req("repository", :string, "Public GitHub owner/repo"),
+          req("query", :string, "Plain title search terms (up to 128 characters)"),
+          opt("state", :string, "all, open, or closed (default: all)")
+        ],
+        fn a -> issues(a["repository"], a["query"], a["state"] || "all") end
+      ),
+      op(
+        "public_issue",
+        "Read a specific public GitHub issue for an exact duplicate check.",
+        false,
+        [
+          req("repository", :string, "Public GitHub owner/repo"),
+          req("number", :integer, "Issue number")
+        ],
+        fn a -> issue(a["repository"], a["number"]) end
+      )
+    ]
+  end
 
   @max_body 262_144
   @max_file 131_072
