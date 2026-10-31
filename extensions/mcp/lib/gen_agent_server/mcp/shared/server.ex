@@ -1,6 +1,8 @@
 defmodule GenAgentServer.MCP.Shared.Server do
   @moduledoc false
-  @version Mix.Project.config()[:version]
+  # The server's version, fixed at compile time so releases, which do not
+  # ship Mix, advertise it too.
+  @version GenAgentServer.MCP.base_version()
   use Snodo.Server,
     name: "gen-agent-server-shared",
     version: @version,

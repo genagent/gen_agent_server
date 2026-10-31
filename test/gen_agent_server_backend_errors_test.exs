@@ -411,29 +411,5 @@ defmodule GenAgentServerBackendErrorsTest do
       assert {:error, %{code: "private_error", message: ~s(private_error: "legacy reason")}} =
                Ops.call("ask", %{"instance" => name, "agent" => "worker", "prompt" => "p"})
     end
-
-    test "the MCP adapter reports the same coarse category" do
-      name = instance(typed())
-
-      assert {:ok, error} =
-               GenAgentServer.MCP.run("ask", %{
-                 "instance" => name,
-                 "agent" => "worker",
-                 "prompt" => "p"
-               })
-
-      refute_leak(error)
-      assert inspect(error) =~ "backend_error: rate_limited (retryable)"
-
-      assert {:ok, id} = GenAgentServer.invoke(name, "worker", "q")
-
-      assert eventually(fn ->
-               match?({:ok, :failed, _}, GenAgentServer.result(name, id))
-             end)
-
-      assert {:ok, result} = GenAgentServer.MCP.run("result", %{"instance" => name, "id" => id})
-      refute_leak(result)
-      assert inspect(result) =~ "backend_error: rate_limited (retryable)"
-    end
   end
 end

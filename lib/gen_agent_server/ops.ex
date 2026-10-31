@@ -6,7 +6,8 @@ defmodule GenAgentServer.Ops do
   `{:error, %{code: String.t(), message: String.t()}}`, where `data` contains
   only maps, lists, strings, numbers, booleans, and nil. The CLI
   (`mix gen_agent_server.ops`), the release RPC path (`GenAgentServer.Ops.Remote`),
-  and the MCP adapter (`GenAgentServer.MCP`) all call `call/3`, so each operation is defined once.
+  and adapters in extensions (such as MCP) all call `call/3`, so each operation is
+  defined once. Extensions add operations through `GenAgentServer.Extension`.
 
   The catalogue holds no state of its own. Every operation reads or changes the
   live instances, Ensemble sessions, and scheduler, so the direct Elixir API

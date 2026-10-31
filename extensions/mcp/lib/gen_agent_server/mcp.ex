@@ -2,14 +2,21 @@ defmodule GenAgentServer.MCP do
   @moduledoc """
   Local stdio MCP adapter over `GenAgentServer.Ops`.
 
-  The catalogue is an allowlist: `instances`, `agents`, `status`, `invoke`,
-  `result`, `cancel`, `ask`, and the lifecycle tools `create_instance`,
-  `describe_instance`, and `stop_instance`, plus read-only public GitHub
-  source tools `public_revision`, `public_file`, `public_issues`, and `public_issue`.
-  Opt-in external peer tools are `discover_peers`, `bind_peer`,
-  `send_peer_message`, and `peer_result`; see `gen-agent://guide/peers`.
-  Every other operation, including
-  `run_pattern`, jobs, and arbitrary pattern specs, stays unreachable from MCP.
+  An optional `GenAgentServer.Extension`. List it in
+  `config :gen_agent_server, extensions: [...]` to start the shared HTTP
+  listener when `:shared_mcp` is configured; stdio serving needs no listing.
+
+  The catalogue is an allowlist of `GenAgentServer.Ops` operations: `instances`,
+  `agents`, `status`, `invoke`, `result`, `cancel`, `ask`, and the lifecycle
+  tools `create_instance`, `describe_instance`, and `stop_instance`, plus the
+  operations of other extensions when they are configured: read-only public
+  GitHub source tools `public_revision`, `public_file`, `public_issues`, and
+  `public_issue`, and opt-in external peer tools `discover_peers`, `bind_peer`,
+  `send_peer_message`, and `peer_result` (see `gen-agent://guide/peers`).
+  An allowlisted name that is not in the catalogue is not served. Every other
+  operation, including `run_pattern`, jobs, and arbitrary pattern specs, stays
+  unreachable from MCP. Tool descriptions and input schemas come from the
+  operation's summary and `GenAgentServer.Ops.json_schema/1`.
   `invoke` and `ask` record telemetry source `:mcp`.
 
   Lifecycle workflow for a client that manages its own agents:
@@ -45,15 +52,42 @@ defmodule GenAgentServer.MCP do
   output goes to stderr.
   """
 
+  @behaviour GenAgentServer.Extension
+
   alias GenAgentServer.Ops
 
-  @tools ~w(instances agents status invoke invocations result cancel ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
-
-  @doc "Names of the operations exposed over MCP."
-  def tools, do: @tools
+  @allowlist ~w(instances agents status invoke invocations result cancel ask create_instance describe_instance stop_instance public_revision public_file public_issues public_issue discover_peers bind_peer send_peer_message peer_result)
 
   @doc false
-  def run(name, arguments) when name in @tools do
+  # The gen_agent_server version, which both MCP servers advertise.
+  def base_version do
+    Application.load(:gen_agent_server)
+    :gen_agent_server |> Application.spec(:vsn) |> to_string()
+  end
+
+  @doc "Every operation name MCP may expose, whether or not its extension is configured."
+  def allowlist, do: @allowlist
+
+  @doc "Names of the operations exposed over MCP: the allowlist entries present in the catalogue."
+  def tools do
+    available = MapSet.new(Ops.list(), & &1.name)
+    Enum.filter(@allowlist, &MapSet.member?(available, &1))
+  end
+
+  @impl GenAgentServer.Extension
+  def children(context) do
+    case Application.get_env(:gen_agent_server, :shared_mcp) do
+      nil ->
+        []
+
+      shared ->
+        GenAgentServer.MCP.Shared.Config.validate_scope!(shared, context[:instances])
+        [{GenAgentServer.MCP.Shared, shared}]
+    end
+  end
+
+  @doc false
+  def run(name, arguments) when name in @allowlist do
     case Ops.call(name, arguments || %{}, source: :mcp) do
       {:ok, data} ->
         {:ok, data |> Jason.encode!() |> Jason.decode!() |> Snodo.Result.structured()}

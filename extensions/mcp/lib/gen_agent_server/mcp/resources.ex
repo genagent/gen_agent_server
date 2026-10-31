@@ -7,7 +7,7 @@ defmodule GenAgentServer.MCP.Resources.Index do
     description: "Start here: the MCP tool catalogue and focused operating guides",
     mime_type: "text/markdown"
 
-  @guide """
+  @head """
   # GenAgent Server guide index
 
   This MCP connection is a local GenAgent Server process. Its tools can create
@@ -22,10 +22,19 @@ defmodule GenAgentServer.MCP.Resources.Index do
     provider sessions, and the boundary between MCP clients.
   - `gen-agent://guide/capabilities` — the exact MCP tools and the server APIs
     that are not available through this connection.
+  """
+
+  @public_source """
   - `gen-agent://guide/public-source` — get a current public GitHub commit,
     read a file pinned to it, and inspect issue states without worker network.
+  """
+
+  @peers """
   - `gen-agent://guide/peers` — bind an existing Claude Desktop Code session,
     deliver a task, and read its correlated reply when peer support is enabled.
+  """
+
+  @tail """
 
   Start with `instances`, then `describe_instance` for a known instance.
   `create_instance` only configures routes; `ask` and `invoke` start model work.
@@ -34,7 +43,14 @@ defmodule GenAgentServer.MCP.Resources.Index do
   """
 
   @impl true
-  def read(_params, _context), do: {:ok, @guide}
+  def read(_params, _context) do
+    tools = GenAgentServer.MCP.tools()
+
+    {:ok,
+     @head <>
+       if("public_revision" in tools, do: @public_source, else: "") <>
+       if("discover_peers" in tools, do: @peers, else: "") <> @tail}
+  end
 end
 
 defmodule GenAgentServer.MCP.Resources.Quickstart do

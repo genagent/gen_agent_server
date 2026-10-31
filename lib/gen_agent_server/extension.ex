@@ -66,8 +66,10 @@ defmodule GenAgentServer.Extension do
     end)
   end
 
+  # ensure_compiled waits for a module that is still being compiled, so an
+  # extension's own modules can read the catalogue at compile time.
   defp exports?(module, function, arity) do
-    case Code.ensure_loaded(module) do
+    case Code.ensure_compiled(module) do
       {:module, ^module} -> function_exported?(module, function, arity)
       {:error, reason} -> raise ArgumentError, "extension #{inspect(module)} #{reason}"
     end

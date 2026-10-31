@@ -252,8 +252,6 @@ defmodule GenAgentServer.PeersTest do
     disabled = start_supervised!({Peers, [name: nil]}, id: :disabled)
     assert {:error, :peers_disabled} = Peers.call(:discover, %{}, disabled)
     assert {:error, :peer_request_not_found} = call(c, :result, %{"id" => "never-submitted"})
-    assert {:ok, client} = Snodo.Client.direct(GenAgentServer.MCP.Server.runtime())
-    assert {:ok, %{"isError" => true}} = Snodo.Client.call_tool(client, "discover_peers", %{})
   end
 
   test "ambiguous identities and a changed native ID cannot silently replace bindings", c do
