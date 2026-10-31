@@ -137,11 +137,13 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
     end
   end
 
-  # Waiting operations get the long ask timeout; the rest the control timeout.
-  defp rpc_timeout(%{name: name}, args) when name in ["ask", "run_pattern"],
-    do: (args["timeout_ms"] || 3_600_000) + 30_000
-
-  defp rpc_timeout(_op, _args), do: 30_000
+  # Waiting operations (those that take `timeout_ms`, such as ask) get the long
+  # ask timeout; the rest the control timeout.
+  defp rpc_timeout(op, args) do
+    if Enum.any?(op.params, &(&1.name == "timeout_ms")),
+      do: (args["timeout_ms"] || 3_600_000) + 30_000,
+      else: 30_000
+  end
 
   defp release_bin! do
     bin =

@@ -17,8 +17,6 @@ defmodule GenAgentServer.Ops do
   Adapters that expose operations to less trusted callers can filter on it.
   """
 
-  alias GenAgentServer.{PatternSpec, Run}
-
   defmodule Op do
     @moduledoc false
     @enforce_keys [:name, :summary, :mutates, :params, :handler]
@@ -166,29 +164,6 @@ defmodule GenAgentServer.Ops do
             {:ok, _} -> {:ok, %{name: a["name"], queued: true}}
             error -> error
           end
-        end
-      ),
-      op("patterns", "List the pattern names that run_pattern accepts.", false, [], fn _ ->
-        {:ok, %{patterns: PatternSpec.patterns()}}
-      end),
-      op(
-        "run_pattern",
-        "Run an Ensemble pattern spec in a temporary instance and return every result.",
-        true,
-        [
-          req("spec", :object, "Pattern spec (see GenAgentServer.PatternSpec)"),
-          req("prompts", :string_list, "Prompts, submitted together"),
-          opt("cwd", :string, "Project directory for CLI providers"),
-          opt("to", :string, "Route for switchboard specs"),
-          opt("timeout_ms", :integer, "Wait limit for all results (default 600000)")
-        ],
-        fn a ->
-          opts =
-            [cwd: a["cwd"] && Path.expand(a["cwd"]), to: a["to"], timeout: a["timeout_ms"]]
-            |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-          with {:ok, report} <- Run.run(a["spec"], a["prompts"], opts),
-               do: {:ok, jsonable(report)}
         end
       ),
       op(

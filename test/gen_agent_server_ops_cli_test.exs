@@ -1,26 +1,12 @@
 defmodule GenAgentServer.OpsCLITest do
   use ExUnit.Case, async: false
 
-  test "the documented underscore timeout works for ask and run_pattern" do
+  test "the documented underscore timeout works for ask" do
     for flag <- ["--timeout_ms", "--timeout-ms", "--timeout_ms=1000"] do
       args = ["gen_agent_server.ops", "ask", "--agent", "echo", "--prompt", "flag"]
       args = if String.contains?(flag, "="), do: args ++ [flag], else: args ++ [flag, "1000"]
       assert %{"status" => "completed", "text" => "echo: flag"} = ok!(args)
     end
-
-    spec = Jason.encode!(%{"pattern" => "pipeline", "stages" => [%{"provider" => "echo"}]})
-
-    assert %{"results" => [%{"status" => "completed", "text" => "echo: pattern"}]} =
-             ok!([
-               "gen_agent_server.ops",
-               "run_pattern",
-               "--spec",
-               spec,
-               "--prompts",
-               "pattern",
-               "--timeout_ms",
-               "1000"
-             ])
   end
 
   test "the underscore timeout reaches the remote operation" do
