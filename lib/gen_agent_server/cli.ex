@@ -11,32 +11,16 @@ defmodule GenAgentServer.CLI do
     {:ok, Enum.join(GenAgentServer.instances(), "\n")}
   end
 
-  def run(["jobs"], _source) do
-    {:ok, Enum.join(GenAgentServer.Dispatch.jobs(), "\n")}
-  end
-
-  def run(["job", name], _source) do
-    case GenAgentServer.Dispatch.latest(name) do
-      {:ok, nil} -> {:ok, "never run"}
-      {:ok, id} -> {:ok, id}
-      error -> error
-    end
-  end
-
-  def run(["run-job", name], _source) do
-    if name in GenAgentServer.Dispatch.jobs() do
-      GenAgentServer.Scheduler.run_job(String.to_existing_atom(name))
-      {:ok, "queued"}
-    else
-      {:error, :unknown_job}
-    end
-  end
-
   def run(["--instance", instance | args], source) when args != [] do
     run_instance(instance, args, source)
   end
 
-  def run(args, source), do: run_instance(GenAgentServer.session_name(), args, source)
+  def run(args, source) do
+    case GenAgentServer.Extension.cli(args, source) do
+      :unhandled -> run_instance(GenAgentServer.session_name(), args, source)
+      result -> result
+    end
+  end
 
   defp run_instance(instance, ["agents"], _source) do
     with {:ok, names} <- GenAgentServer.agents(instance), do: {:ok, Enum.join(names, "\n")}
@@ -118,19 +102,12 @@ defmodule GenAgentServer.CLI do
     "instance #{instance} is busy"
   end
 
-  def error_message(args, :unknown_job) do
-    case command(args) do
-      {[command, name], _instance} when command in ["job", "run-job"] ->
-        "job #{name} not found"
-
-      _ ->
-        "job not found"
-    end
-  end
+  # An extension command can return a message ready to print.
+  def error_message(_args, {:message, text}) when is_binary(text), do: text
 
   def error_message(_args, :usage),
     do:
-      "usage: gen_agent_server instances | jobs | job NAME | run-job NAME | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+      "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
 
   def error_message(args, {:unknown_agent, name}) do
     {_command, instance} = command(args)

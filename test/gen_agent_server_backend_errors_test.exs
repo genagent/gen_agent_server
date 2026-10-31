@@ -7,7 +7,7 @@ defmodule GenAgentServerBackendErrorsTest do
 
   @moduletag :capture_log
 
-  alias GenAgentServer.{Ops, Run}
+  alias GenAgentServer.Ops
 
   @sentinels [
     "SENTINEL_RAW_BODY",
@@ -57,20 +57,6 @@ defmodule GenAgentServerBackendErrorsTest do
   end
 
   defp nest(term, levels), do: Enum.reduce(1..levels, term, fn _, acc -> {:wrap, acc} end)
-
-  defp override_echo(reason) do
-    previous = Application.get_env(:gen_agent_server, :provider_overrides)
-
-    on_exit(fn ->
-      if previous,
-        do: Application.put_env(:gen_agent_server, :provider_overrides, previous),
-        else: Application.delete_env(:gen_agent_server, :provider_overrides)
-    end)
-
-    Application.put_env(:gen_agent_server, :provider_overrides, %{
-      "echo" => [backend: FailingBackend, reason: reason]
-    })
-  end
 
   defp instance(reason) do
     name = "backend-errors-#{System.unique_integer([:positive])}"
@@ -252,57 +238,6 @@ defmodule GenAgentServerBackendErrorsTest do
     end
   end
 
-  describe "Run and run_pattern" do
-    @solo %{"pattern" => "solo", "agent" => %{"provider" => "echo"}}
-
-    test "failed items carry the coarse category, not the typed error" do
-      override_echo(typed())
-
-      assert {:ok, %{results: [item]} = report} = Run.run(@solo, ["p"], timeout: 10_000)
-      assert item.status == :failed
-      assert item.error == "backend_error: rate_limited (retryable)"
-      refute_leak(report)
-      assert {:ok, _} = Jason.encode(report)
-
-      assert {:ok, public} = Ops.call("run_pattern", %{"spec" => @solo, "prompts" => ["p"]})
-
-      assert [%{"status" => "failed", "error" => "backend_error: rate_limited (retryable)"}] =
-               public["results"]
-
-      refute_leak(public)
-    end
-
-    test "pipeline stage wrappers do not expose the typed error" do
-      override_echo(typed())
-      spec = %{"pattern" => "pipeline", "stages" => [@solo["agent"], @solo["agent"]]}
-
-      assert {:ok, %{results: [item]} = report} = Run.run(spec, ["p"], timeout: 10_000)
-      assert item.status == :failed
-      assert item.error =~ "{:backend_error, :rate_limited}"
-      refute_leak(report)
-
-      assert {:ok, public} = Ops.call("run_pattern", %{"spec" => spec, "prompts" => ["p"]})
-      refute_leak(public)
-    end
-
-    test "oversized wrappers are truncated instead of inspected" do
-      override_echo({:stage, List.duplicate(:filler, 5_000) ++ [typed()]})
-
-      assert {:ok, %{results: [item]} = report} = Run.run(@solo, ["p"], timeout: 10_000)
-      assert item.status == :failed
-      refute_leak(report)
-    end
-
-    test "legacy reasons keep their inspect text" do
-      reason = {:private_error, "legacy reason"}
-      override_echo(reason)
-
-      assert {:ok, %{results: [item]}} = Run.run(@solo, ["p"], timeout: 10_000)
-      assert item.status == :failed
-      assert item.error == inspect(reason)
-    end
-  end
-
   describe "CLI errors" do
     test "local and remote CLI presentation omits typed diagnostics" do
       for reason <- [typed(), {"stage", typed()}] do
@@ -410,30 +345,6 @@ defmodule GenAgentServerBackendErrorsTest do
 
       assert {:error, %{code: "private_error", message: ~s(private_error: "legacy reason")}} =
                Ops.call("ask", %{"instance" => name, "agent" => "worker", "prompt" => "p"})
-    end
-
-    test "the MCP adapter reports the same coarse category" do
-      name = instance(typed())
-
-      assert {:ok, error} =
-               GenAgentServer.MCP.run("ask", %{
-                 "instance" => name,
-                 "agent" => "worker",
-                 "prompt" => "p"
-               })
-
-      refute_leak(error)
-      assert inspect(error) =~ "backend_error: rate_limited (retryable)"
-
-      assert {:ok, id} = GenAgentServer.invoke(name, "worker", "q")
-
-      assert eventually(fn ->
-               match?({:ok, :failed, _}, GenAgentServer.result(name, id))
-             end)
-
-      assert {:ok, result} = GenAgentServer.MCP.run("result", %{"instance" => name, "id" => id})
-      refute_leak(result)
-      assert inspect(result) =~ "backend_error: rate_limited (retryable)"
     end
   end
 end

@@ -19,7 +19,7 @@ defmodule GenAgentServer.OpsTest do
   test "read operations are marked as not mutating" do
     reads = for op <- Ops.operations(), not op.mutates, do: op.name
     assert "instances" in reads and "result" in reads and "status" in reads
-    refute "invoke" in reads or "run_pattern" in reads or "stop_instance" in reads
+    refute "invoke" in reads or "stop_instance" in reads
   end
 
   test "validates arguments before running" do
@@ -60,31 +60,6 @@ defmodule GenAgentServer.OpsTest do
     assert {:ok, _} = Jason.encode(status)
     assert status["strategy"] == "GenAgentEnsemble.Strategies.Switchboard"
     assert {:error, %{code: "instance_not_found"}} = Ops.call("status", %{"instance" => "nope"})
-  end
-
-  test "run_pattern runs a spec and cleans up its instance" do
-    spec = %{
-      "pattern" => "pipeline",
-      "stages" => [%{"provider" => "echo"}, %{"provider" => "echo"}]
-    }
-
-    assert {:ok, %{"results" => [%{"status" => "completed", "text" => "echo: echo: a"}]} = report} =
-             Ops.call("run_pattern", %{"spec" => spec, "prompts" => ["a"]})
-
-    assert eventually(fn -> report["instance"] not in GenAgentServer.instances() end)
-
-    assert {:error, %{code: "unknown_pattern"}} =
-             Ops.call("run_pattern", %{"spec" => %{"pattern" => "mesh"}, "prompts" => ["a"]})
-
-    assert {:error, %{code: "invalid_role"}} =
-             Ops.call("run_pattern", %{
-               "spec" => %{
-                 "pattern" => "consensus",
-                 "agents" => [%{"provider" => "echo", "role" => 7}, %{"provider" => "echo"}],
-                 "verdicts" => ["yes"]
-               },
-               "prompts" => ["a"]
-             })
   end
 
   test "the remote entry point prints one JSON envelope" do

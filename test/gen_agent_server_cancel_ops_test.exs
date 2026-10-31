@@ -1,7 +1,7 @@
 defmodule GenAgentServer.CancelOpsTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureIO
-  alias GenAgentServer.{MCP, Ops, Remote}
+  alias GenAgentServer.{Ops, Remote}
 
   defmodule Backend do
     @behaviour GenAgent.Backend
@@ -28,8 +28,7 @@ defmodule GenAgentServer.CancelOpsTest do
       on_exit(fn -> GenAgentServer.stop_instance(name) end)
     end
 
-    {:ok, client} = Snodo.Client.direct(MCP.Server.runtime())
-    %{names: names, client: client}
+    %{names: names}
   end
 
   test "Ops requires exact scope and preserves pending, terminal, unknown and repeated IDs", %{
@@ -76,8 +75,8 @@ defmodule GenAgentServer.CancelOpsTest do
              Ops.call("cancel", %{args | "instance" => "missing"})
   end
 
-  test "remote CLI and stdio MCP use the canonical operation", %{names: [name, _], client: client} do
-    for surface <- [:remote, :mcp, :ops_cli] do
+  test "remote CLI and the Ops CLI use the canonical operation", %{names: [name, _]} do
+    for surface <- [:remote, :ops_cli] do
       assert {:ok, id} = GenAgentServer.invoke(name, "worker", "blocked")
       assert_receive {:entered, "blocked", _}
       args = %{"instance" => name, "id" => id}
@@ -101,16 +100,6 @@ defmodule GenAgentServer.CancelOpsTest do
 
           assert {:error, message} = Remote.decode_response(output)
           assert message =~ "already_finished"
-
-        :mcp ->
-          assert {:ok,
-                  %{
-                    "structuredContent" => %{
-                      "instance" => ^name,
-                      "id" => ^id,
-                      "status" => "cancelled"
-                    }
-                  }} = Snodo.Client.call_tool(client, "cancel", args)
 
         :ops_cli ->
           output =

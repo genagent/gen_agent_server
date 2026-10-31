@@ -49,7 +49,6 @@ defmodule GenAgentServer.CLITest do
           {["--instance", "server/default", "result", "inv-12"],
            "invocation inv-12 not found in instance server/default"},
           {["--instance", "missing", "agents"], "instance missing not found"},
-          {["job", "missing"], "job missing not found"},
           {["bad-command"], "usage: gen_agent_server"}
         ] do
       {output, status} = mix(["gen_agent_server.remote" | args], release)

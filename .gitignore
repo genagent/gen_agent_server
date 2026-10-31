@@ -2,3 +2,5 @@
 /deps/
 /.elixir_ls/
 /erl_crash.dump
+/extensions/*/_build/
+/extensions/*/deps/

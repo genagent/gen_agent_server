@@ -6,7 +6,8 @@ defmodule GenAgentServer.Ops do
   `{:error, %{code: String.t(), message: String.t()}}`, where `data` contains
   only maps, lists, strings, numbers, booleans, and nil. The CLI
   (`mix gen_agent_server.ops`), the release RPC path (`GenAgentServer.Ops.Remote`),
-  and the MCP adapter (`GenAgentServer.MCP`) all call `call/3`, so each operation is defined once.
+  and adapters in extensions (such as MCP) all call `call/3`, so each operation is
+  defined once. Extensions add operations through `GenAgentServer.Extension`.
 
   The catalogue holds no state of its own. Every operation reads or changes the
   live instances, Ensemble sessions, and scheduler, so the direct Elixir API
@@ -16,18 +17,41 @@ defmodule GenAgentServer.Ops do
   Adapters that expose operations to less trusted callers can filter on it.
   """
 
-  alias GenAgentServer.{PatternSpec, PublicSource, Run}
-
   defmodule Op do
     @moduledoc false
     @enforce_keys [:name, :summary, :mutates, :params, :handler]
     defstruct [:name, :summary, :mutates, :params, :handler]
+
+    @type t :: %__MODULE__{
+            name: String.t(),
+            summary: String.t(),
+            mutates: boolean(),
+            params: [map()],
+            handler: (map() -> {:ok, term()} | {:error, term()})
+          }
   end
 
   @type param_type :: :string | :integer | :object | :string_list
 
-  @doc "All operations, sorted by name."
+  @doc """
+  All operations, base and configured extensions, sorted by name.
+
+  Raises `ArgumentError` when two operations share a name.
+  """
   def operations do
+    ops = base_operations() ++ GenAgentServer.Extension.operations()
+    names = Enum.map(ops, & &1.name)
+
+    case names -- Enum.uniq(names) do
+      [] ->
+        Enum.sort_by(ops, & &1.name)
+
+      dups ->
+        raise ArgumentError, "duplicate operation names: #{Enum.join(Enum.uniq(dups), ", ")}"
+    end
+  end
+
+  defp base_operations do
     [
       op("instances", "List running instances.", false, [], fn _ ->
         {:ok, %{instances: GenAgentServer.instances()}}
@@ -116,95 +140,6 @@ defmodule GenAgentServer.Ops do
         end
       ),
       op(
-        "jobs",
-        "List configured scheduled jobs with their latest invocation ID.",
-        false,
-        [],
-        fn _ ->
-          jobs =
-            for name <- guarded_jobs() do
-              {:ok, latest} = GenAgentServer.Dispatch.latest(name)
-              %{name: name, latest: latest}
-            end
-
-          {:ok, %{jobs: jobs}}
-        end
-      ),
-      op(
-        "run_job",
-        "Queue one immediate run of a scheduled job.",
-        true,
-        [req("name", :string, "Job name")],
-        fn a ->
-          case GenAgentServer.CLI.run(["run-job", a["name"]]) do
-            {:ok, _} -> {:ok, %{name: a["name"], queued: true}}
-            error -> error
-          end
-        end
-      ),
-      op("patterns", "List the pattern names that run_pattern accepts.", false, [], fn _ ->
-        {:ok, %{patterns: PatternSpec.patterns()}}
-      end),
-      op(
-        "public_revision",
-        "Resolve a public GitHub repository's default branch to its current commit SHA.",
-        false,
-        [req("repository", :string, "Public GitHub owner/repo")],
-        fn a -> PublicSource.revision(a["repository"]) end
-      ),
-      op(
-        "public_file",
-        "Read a bounded UTF-8 source file from an exact public GitHub commit.",
-        false,
-        [
-          req("repository", :string, "Public GitHub owner/repo"),
-          req("sha", :string, "Full 40-character commit SHA"),
-          req("path", :string, "Relative source file path (up to 128 KiB)")
-        ],
-        fn a -> PublicSource.file(a["repository"], a["sha"], a["path"]) end
-      ),
-      op(
-        "public_issues",
-        "Search up to 20 public GitHub issue titles and return their current states.",
-        false,
-        [
-          req("repository", :string, "Public GitHub owner/repo"),
-          req("query", :string, "Plain title search terms (up to 128 characters)"),
-          opt("state", :string, "all, open, or closed (default: all)")
-        ],
-        fn a -> PublicSource.issues(a["repository"], a["query"], a["state"] || "all") end
-      ),
-      op(
-        "public_issue",
-        "Read a specific public GitHub issue for an exact duplicate check.",
-        false,
-        [
-          req("repository", :string, "Public GitHub owner/repo"),
-          req("number", :integer, "Issue number")
-        ],
-        fn a -> PublicSource.issue(a["repository"], a["number"]) end
-      ),
-      op(
-        "run_pattern",
-        "Run an Ensemble pattern spec in a temporary instance and return every result.",
-        true,
-        [
-          req("spec", :object, "Pattern spec (see GenAgentServer.PatternSpec)"),
-          req("prompts", :string_list, "Prompts, submitted together"),
-          opt("cwd", :string, "Project directory for CLI providers"),
-          opt("to", :string, "Route for switchboard specs"),
-          opt("timeout_ms", :integer, "Wait limit for all results (default 600000)")
-        ],
-        fn a ->
-          opts =
-            [cwd: a["cwd"] && Path.expand(a["cwd"]), to: a["to"], timeout: a["timeout_ms"]]
-            |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-          with {:ok, report} <- Run.run(a["spec"], a["prompts"], opts),
-               do: {:ok, jsonable(report)}
-        end
-      ),
-      op(
         "stop_instance",
         "Stop a runtime instance (not the default instance). Its routes and stored results are discarded.",
         true,
@@ -232,41 +167,6 @@ defmodule GenAgentServer.Ops do
         end
       ),
       op(
-        "discover_peers",
-        "Discover existing Claude sessions and describe bindings. Read-only; peer support must be enabled.",
-        false,
-        [opt("name", :string, "Exact native session name (optional)")],
-        fn a -> GenAgentServer.Peers.call(:discover, a) end
-      ),
-      op(
-        "bind_peer",
-        "Bind a claude:// alias to one verified existing native session. Never launches a replacement.",
-        true,
-        [
-          req("address", :string, "Canonical provider-qualified alias"),
-          req("session_id", :string, "Discovered native session ID")
-        ],
-        fn a -> GenAgentServer.Peers.call(:bind, a) end
-      ),
-      op(
-        "send_peer_message",
-        "Send bounded work to an existing peer. Socket write is not acknowledgement; duplicate keys never resend.",
-        true,
-        [
-          req("address", :string, "Bound alias"),
-          req("message", :string, "Task text (up to 65536 bytes)"),
-          req("idempotency_key", :string, "Stable caller task key (up to 256 bytes)")
-        ],
-        fn a -> GenAgentServer.Peers.call(:send, a) end
-      ),
-      op(
-        "peer_result",
-        "Read the same correlated peer request repeatedly. Unknown execution or timeout never authorizes resending.",
-        false,
-        [req("id", :string, "Peer request ID")],
-        fn a -> GenAgentServer.Peers.call(:result, a) end
-      ),
-      op(
         "describe_instance",
         "Describe an instance: routes with provider, model, effort, access mode, and response text selection, plus limits.",
         false,
@@ -277,7 +177,6 @@ defmodule GenAgentServer.Ops do
         end
       )
     ]
-    |> Enum.sort_by(& &1.name)
   end
 
   @doc "Catalogue entries without handlers, for listing and help output."
@@ -334,14 +233,25 @@ defmodule GenAgentServer.Ops do
   end
 
   # -- params ------------------------------------------------------------------
+  #
+  # The builders are public so extensions define operations the same way.
 
-  defp op(name, summary, mutates, params, handler),
+  @doc "Build an operation. `mutates` marks operations that start work or change state."
+  @spec op(String.t(), String.t(), boolean(), [map()], (map() -> term())) :: Op.t()
+  def op(name, summary, mutates, params, handler),
     do: %Op{name: name, summary: summary, mutates: mutates, params: params, handler: handler}
 
-  defp req(name, type, doc), do: %{name: name, type: type, required: true, doc: doc}
-  defp opt(name, type, doc), do: %{name: name, type: type, required: false, doc: doc}
+  @doc "A required parameter."
+  @spec req(String.t(), param_type(), String.t()) :: map()
+  def req(name, type, doc), do: %{name: name, type: type, required: true, doc: doc}
 
-  defp instance,
+  @doc "An optional parameter."
+  @spec opt(String.t(), param_type(), String.t()) :: map()
+  def opt(name, type, doc), do: %{name: name, type: type, required: false, doc: doc}
+
+  @doc "The optional `instance` parameter, defaulting to the default instance."
+  @spec instance() :: map()
+  def instance,
     do: %{
       name: "instance",
       type: :string,
@@ -487,12 +397,6 @@ defmodule GenAgentServer.Ops do
     fun.()
   catch
     :exit, {:noproc, _} -> {:error, :instance_not_found}
-  end
-
-  defp guarded_jobs do
-    GenAgentServer.Dispatch.jobs()
-  catch
-    :exit, {:noproc, _} -> []
   end
 
   # -- errors and encoding -----------------------------------------------------
