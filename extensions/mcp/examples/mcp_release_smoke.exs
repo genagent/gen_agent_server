@@ -1,5 +1,8 @@
 # Run after `MIX_ENV=prod mix release` to check the packaged MCP entry point.
-release = Path.expand("_build/prod/rel/gen_agent_server/bin/gen_agent_server")
+# Expectations follow the extensions configured for this project, so the same
+# script checks a release with or without the public source and peer extensions.
+release = Path.expand("_build/prod/rel/gen_agent_server_mcp/bin/gen_agent_server_mcp")
+served = GenAgentServer.MCP.tools()
 
 {:ok, client} =
   Snodo.Client.connect({:stdio, release, ["eval", "GenAgentServer.MCP.serve()"]})
@@ -13,7 +16,10 @@ try do
   {:ok, resources} = Snodo.Client.list_resources(client)
 
   guide_uris =
-    ~w(gen-agent://guide/capabilities gen-agent://guide/index gen-agent://guide/invocations gen-agent://guide/peers gen-agent://guide/public-source gen-agent://guide/quickstart gen-agent://guide/scope)
+    (~w(gen-agent://guide/capabilities gen-agent://guide/index gen-agent://guide/invocations gen-agent://guide/quickstart gen-agent://guide/scope) ++
+       if("public_revision" in served, do: ["gen-agent://guide/public-source"], else: []) ++
+       if("discover_peers" in served, do: ["gen-agent://guide/peers"], else: []))
+    |> Enum.sort()
 
   unless resources |> Enum.map(& &1["uri"]) |> Enum.sort() == guide_uris,
     do: raise("MCP guide catalogue is incomplete")
@@ -54,8 +60,7 @@ try do
   {:ok, tools} = Snodo.Client.list_tools(client)
   names = Enum.map(tools, & &1["name"]) |> Enum.sort()
 
-  expected =
-    ~w(agents ask bind_peer cancel create_instance describe_instance discover_peers instances invocations invoke peer_result public_file public_issue public_issues public_revision result send_peer_message status stop_instance)
+  expected = Enum.sort(served)
 
   unless names == expected, do: raise("wrong MCP catalogue: #{inspect(names)}")
 
@@ -124,10 +129,12 @@ try do
 
   text = fn result -> result["content"] |> Enum.map_join(" ", & &1["text"]) end
 
-  peer_disabled = call.("discover_peers", %{})
+  if "discover_peers" in served do
+    peer_disabled = call.("discover_peers", %{})
 
-  unless peer_disabled["isError"] == true and text.(peer_disabled) =~ "peers_disabled",
-    do: raise("peer opt-in boundary failed: #{inspect(peer_disabled)}")
+    unless peer_disabled["isError"] == true and text.(peer_disabled) =~ "peers_disabled",
+      do: raise("peer opt-in boundary failed: #{inspect(peer_disabled)}")
+  end
 
   config = %{
     "max_in_flight" => 3,

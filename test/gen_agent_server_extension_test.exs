@@ -78,10 +78,23 @@ defmodule GenAgentServerExtensionTest do
     assert_raise ArgumentError, ~r/duplicate operation names: agents/, fn -> Ops.operations() end
   end
 
-  test "with no extensions the catalogue holds only base operations" do
+  test "with no extensions the catalogue and supervision tree hold only base entries" do
     restart_with([])
 
-    refute "probe" in Enum.map(Ops.list(), & &1.name)
+    assert Enum.map(Ops.list(), & &1.name) ==
+             ~w(agents ask cancel create_instance describe_instance instances invocations invoke result status stop_instance)
+
     assert {:error, %{code: "unknown_operation"}} = Ops.call("probe")
+
+    ids =
+      for {id, _pid, _type, _modules} <- Supervisor.which_children(GenAgentServer.Supervisor),
+          do: id
+
+    assert Enum.sort(ids) ==
+             Enum.sort([
+               GenAgentServer.Registry,
+               GenAgentServer.InstanceSupervisor,
+               :default_instance
+             ])
   end
 end

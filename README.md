@@ -5,6 +5,11 @@ entry point. It uses the published GenAgent, Ensemble, and CLI backend packages.
 The default Echo backend needs no login and makes the application easy to
 smoke-test. This is an early dogfooding host, not a durable job service.
 
+The base server drives agents: instances, invocations, results, cancellation,
+the `GenAgentServer.Ops` catalogue, the CLI, and release rpc. MCP, scheduled
+jobs, JSON pattern runs, public source reads, peers, and the control and
+selection libraries are optional [extensions](#extensions).
+
 ## Run locally
 
 ```sh
@@ -44,7 +49,7 @@ multi-turn session.
 {:ok, summaries} = GenAgentServer.invocations("review", limit: 50)
 ```
 
-The same read is available as Ops `invocations` (and the stdio MCP tool):
+The same read is available as Ops `invocations` (and as an MCP tool with the MCP extension):
 
 ```sh
 MIX_QUIET=1 mix gen_agent_server.ops invocations --instance review --limit 50 --remote
@@ -221,8 +226,9 @@ mix gen_agent_server.ops cancel --instance review --id "$ID" --remote
 mix gen_agent_server.remote --instance review cancel "$ID"
 ```
 
-Both stdio and shared MCP accept `cancel` with `{"instance":"review","id":"..."}`.
-Shared MCP requires its bearer token and an allowed instance for cancellation.
+With the [MCP extension](extensions/mcp/README.md), stdio and shared MCP accept
+`cancel` with `{"instance":"review","id":"..."}`; shared MCP also requires its
+bearer token and an allowed instance.
 
 Recipient must be a PID or nil; invalid values are rejected before admission.
 Recipient options are consumed by the server and never forwarded to Ensemble or
@@ -317,25 +323,16 @@ read the original response and its retained events with `GenAgentServer.ask/3`
 or `GenAgentServer.result/2`; check `Response.event_coverage` before treating
 the retained event list as complete.
 
-To run an Ensemble pattern from a JSON spec, use `gen_agent_server.run`. The
-included Echo specs are safe to try without a CLI provider:
-
-```sh
-mix gen_agent_server.run examples/specs/echo/pool.json \
-  --prompt "Review one file" --prompt "Review another" --output report.json
-```
-
 `mix gen_agent_server.ops` lists the typed operations available to scripts and
-the MCP adapter. `--remote` runs an operation in the release above, where
+to adapters such as the MCP extension, including operations added by configured
+extensions. `--remote` runs an operation in the release above, where
 invocation results persist across commands. Set `MIX_QUIET=1` when parsing
 stdout so a first-time Mix compile does not prefix the JSON with build notices:
 
 ```sh
-MIX_QUIET=1 mix gen_agent_server.ops patterns
+MIX_QUIET=1 mix gen_agent_server.ops instances
 MIX_QUIET=1 mix gen_agent_server.ops invoke --agent echo --prompt "hello" --remote
 MIX_QUIET=1 mix gen_agent_server.ops result --id INVOCATION_ID --remote
-MIX_QUIET=1 mix gen_agent_server.ops run_pattern \
-  --spec @examples/specs/echo/pool.json --prompts "Check a claim" --remote
 ```
 
 Set `GEN_AGENT_SERVER_RELEASE_BIN` if the release binary lives elsewhere.
@@ -353,6 +350,12 @@ config :gen_agent_server, extensions: [GenAgentServer.MCP]
 
 With none listed, the server starts only its instances and the base `Ops`
 catalogue. See `GenAgentServer.Extension` for the callbacks.
+
+Each extension directory is also a runnable project that lists itself, so
+`cd extensions/mcp && mix gen_agent_server.mcp` serves MCP from a checkout.
+Hosts call `GenAgentServer.RuntimeConfig.from_env!/1` from their own
+`config/runtime.exs` to read the same `GEN_AGENT_SERVER_*` variables as this
+repository.
 
 | Extension | What it adds |
 | --- | --- |
@@ -374,8 +377,8 @@ An `ask` timeout or caller exit does not establish that an underlying provider
 process stopped; GenAgent's turn watchdog bounds active work. There is no
 durable admission, automatic retry, or cross-node result store yet.
 
-The app has repeatable result reads for multiple clients. Stdio and shared local
-MCP expose explicit invocation cancellation with the exact instance and ID.
+The app has repeatable result reads for multiple clients. Ops, the CLI, and the
+MCP extension expose explicit invocation cancellation with the exact instance and ID.
 Cancellation acknowledgement does not establish provider process cleanup.
 
 ## Telemetry
@@ -389,7 +392,7 @@ have `system_time` in the VM native unit. The module
 `GenAgentServer.Telemetry` documents the metadata contract.
 
 Invocation events carry `instance`, `agent`, `invocation_id`,
-`ensemble_token`, and `source` (`:api`, `:local_cli`, `:remote_cli`,
-`:scheduler`, or `:mcp`). They never contain prompts, responses, provider
+`ensemble_token`, and `source` (`:api`, `:local_cli`, `:remote_cli`, or an
+extension's source such as `:scheduler` or `:mcp`). They never contain prompts, responses, provider
 state, or raw errors. Use IDs and names to correlate a trace, not as metric
 labels. Repeated `result` reads do not emit another terminal event.

@@ -2,7 +2,7 @@
 # Run: mix run examples/shared_mcp_release_smoke.exs
 # This uses a packaged long-lived VM and two independent HTTP clients.
 defmodule SharedMCPReleaseSmoke do
-  @release Path.expand("_build/prod/rel/gen_agent_server/bin/gen_agent_server")
+  @release Path.expand("_build/prod/rel/gen_agent_server_mcp/bin/gen_agent_server_mcp")
 
   def run do
     {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
