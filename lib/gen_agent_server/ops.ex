@@ -22,12 +22,37 @@ defmodule GenAgentServer.Ops do
     @moduledoc false
     @enforce_keys [:name, :summary, :mutates, :params, :handler]
     defstruct [:name, :summary, :mutates, :params, :handler]
+
+    @type t :: %__MODULE__{
+            name: String.t(),
+            summary: String.t(),
+            mutates: boolean(),
+            params: [map()],
+            handler: (map() -> {:ok, term()} | {:error, term()})
+          }
   end
 
   @type param_type :: :string | :integer | :object | :string_list
 
-  @doc "All operations, sorted by name."
+  @doc """
+  All operations, base and configured extensions, sorted by name.
+
+  Raises `ArgumentError` when two operations share a name.
+  """
   def operations do
+    ops = base_operations() ++ GenAgentServer.Extension.operations()
+    names = Enum.map(ops, & &1.name)
+
+    case names -- Enum.uniq(names) do
+      [] ->
+        Enum.sort_by(ops, & &1.name)
+
+      dups ->
+        raise ArgumentError, "duplicate operation names: #{Enum.join(Enum.uniq(dups), ", ")}"
+    end
+  end
+
+  defp base_operations do
     [
       op("instances", "List running instances.", false, [], fn _ ->
         {:ok, %{instances: GenAgentServer.instances()}}
@@ -277,7 +302,6 @@ defmodule GenAgentServer.Ops do
         end
       )
     ]
-    |> Enum.sort_by(& &1.name)
   end
 
   @doc "Catalogue entries without handlers, for listing and help output."
@@ -334,14 +358,25 @@ defmodule GenAgentServer.Ops do
   end
 
   # -- params ------------------------------------------------------------------
+  #
+  # The builders are public so extensions define operations the same way.
 
-  defp op(name, summary, mutates, params, handler),
+  @doc "Build an operation. `mutates` marks operations that start work or change state."
+  @spec op(String.t(), String.t(), boolean(), [map()], (map() -> term())) :: Op.t()
+  def op(name, summary, mutates, params, handler),
     do: %Op{name: name, summary: summary, mutates: mutates, params: params, handler: handler}
 
-  defp req(name, type, doc), do: %{name: name, type: type, required: true, doc: doc}
-  defp opt(name, type, doc), do: %{name: name, type: type, required: false, doc: doc}
+  @doc "A required parameter."
+  @spec req(String.t(), param_type(), String.t()) :: map()
+  def req(name, type, doc), do: %{name: name, type: type, required: true, doc: doc}
 
-  defp instance,
+  @doc "An optional parameter."
+  @spec opt(String.t(), param_type(), String.t()) :: map()
+  def opt(name, type, doc), do: %{name: name, type: type, required: false, doc: doc}
+
+  @doc "The optional `instance` parameter, defaulting to the default instance."
+  @spec instance() :: map()
+  def instance,
     do: %{
       name: "instance",
       type: :string,

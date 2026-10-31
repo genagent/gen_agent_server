@@ -58,7 +58,8 @@ defmodule GenAgentServer.Application do
           {GenAgentServer.Peers, Application.get_env(:gen_agent_server, :peers, [])}
         ] ++
         if(jobs == [], do: [], else: [GenAgentServer.Scheduler]) ++
-        if(shared_mcp, do: [{GenAgentServer.MCP.Shared, shared_mcp}], else: [])
+        if(shared_mcp, do: [{GenAgentServer.MCP.Shared, shared_mcp}], else: []) ++
+        GenAgentServer.Extension.children(instances: instances, profile_file: profile_file)
 
     Supervisor.start_link(children,
       strategy: :rest_for_one,

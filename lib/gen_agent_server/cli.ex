@@ -36,7 +36,12 @@ defmodule GenAgentServer.CLI do
     run_instance(instance, args, source)
   end
 
-  def run(args, source), do: run_instance(GenAgentServer.session_name(), args, source)
+  def run(args, source) do
+    case GenAgentServer.Extension.cli(args, source) do
+      :unhandled -> run_instance(GenAgentServer.session_name(), args, source)
+      result -> result
+    end
+  end
 
   defp run_instance(instance, ["agents"], _source) do
     with {:ok, names} <- GenAgentServer.agents(instance), do: {:ok, Enum.join(names, "\n")}

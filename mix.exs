@@ -12,7 +12,18 @@ defmodule GenAgentServer.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger, :crypto], mod: {GenAgentServer.Application, []}]
+    [
+      extra_applications: [:logger, :crypto],
+      mod: {GenAgentServer.Application, []},
+      # Defaults for use as a dependency; config/runtime.exs overrides them here.
+      env: [
+        session_name: "server/default",
+        agents: [
+          {"echo", GenAgentEnsemble.Agents.Simple, [backend: GenAgentEnsemble.Backends.Echo]}
+        ],
+        extensions: []
+      ]
+    ]
   end
 
   defp deps do
