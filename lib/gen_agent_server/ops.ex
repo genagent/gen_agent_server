@@ -140,33 +140,6 @@ defmodule GenAgentServer.Ops do
         end
       ),
       op(
-        "jobs",
-        "List configured scheduled jobs with their latest invocation ID.",
-        false,
-        [],
-        fn _ ->
-          jobs =
-            for name <- guarded_jobs() do
-              {:ok, latest} = GenAgentServer.Dispatch.latest(name)
-              %{name: name, latest: latest}
-            end
-
-          {:ok, %{jobs: jobs}}
-        end
-      ),
-      op(
-        "run_job",
-        "Queue one immediate run of a scheduled job.",
-        true,
-        [req("name", :string, "Job name")],
-        fn a ->
-          case GenAgentServer.CLI.run(["run-job", a["name"]]) do
-            {:ok, _} -> {:ok, %{name: a["name"], queued: true}}
-            error -> error
-          end
-        end
-      ),
-      op(
         "stop_instance",
         "Stop a runtime instance (not the default instance). Its routes and stored results are discarded.",
         true,
@@ -459,12 +432,6 @@ defmodule GenAgentServer.Ops do
     fun.()
   catch
     :exit, {:noproc, _} -> {:error, :instance_not_found}
-  end
-
-  defp guarded_jobs do
-    GenAgentServer.Dispatch.jobs()
-  catch
-    :exit, {:noproc, _} -> []
   end
 
   # -- errors and encoding -----------------------------------------------------
