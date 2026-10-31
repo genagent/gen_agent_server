@@ -6,7 +6,60 @@ defmodule GenAgentServer.Peers do
   `claude_home: path`. Without a store, state is connection-local and volatile.
   Persist before sending, never automatically resend uncertain work, and keep
   externally owned processes alive when this server exits.
+
+  An optional `GenAgentServer.Extension`: listing it starts this process under
+  the application supervisor and adds the `discover_peers`, `bind_peer`,
+  `send_peer_message`, and `peer_result` operations to `GenAgentServer.Ops`.
   """
+
+  @behaviour GenAgentServer.Extension
+
+  import GenAgentServer.Ops, only: [op: 5, req: 3, opt: 3]
+
+  @impl GenAgentServer.Extension
+  def children(_context), do: [{__MODULE__, Application.get_env(:gen_agent_server, :peers, [])}]
+
+  @impl GenAgentServer.Extension
+  def operations do
+    [
+      op(
+        "discover_peers",
+        "Discover existing Claude sessions and describe bindings. Read-only; peer support must be enabled.",
+        false,
+        [opt("name", :string, "Exact native session name (optional)")],
+        fn a -> call(:discover, a) end
+      ),
+      op(
+        "bind_peer",
+        "Bind a claude:// alias to one verified existing native session. Never launches a replacement.",
+        true,
+        [
+          req("address", :string, "Canonical provider-qualified alias"),
+          req("session_id", :string, "Discovered native session ID")
+        ],
+        fn a -> call(:bind, a) end
+      ),
+      op(
+        "send_peer_message",
+        "Send bounded work to an existing peer. Socket write is not acknowledgement; duplicate keys never resend.",
+        true,
+        [
+          req("address", :string, "Bound alias"),
+          req("message", :string, "Task text (up to 65536 bytes)"),
+          req("idempotency_key", :string, "Stable caller task key (up to 256 bytes)")
+        ],
+        fn a -> call(:send, a) end
+      ),
+      op(
+        "peer_result",
+        "Read the same correlated peer request repeatedly. Unknown execution or timeout never authorizes resending.",
+        false,
+        [req("id", :string, "Peer request ID")],
+        fn a -> call(:result, a) end
+      )
+    ]
+  end
+
   use GenServer
   alias GenAgentServer.Peers.Claude
 

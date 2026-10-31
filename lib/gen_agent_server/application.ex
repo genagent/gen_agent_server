@@ -35,7 +35,6 @@ defmodule GenAgentServer.Application do
             restart: :permanent
           )
         end) ++
-        [{GenAgentServer.Peers, Application.get_env(:gen_agent_server, :peers, [])}] ++
         GenAgentServer.Extension.children(instances: instances, profile_file: profile_file)
 
     Supervisor.start_link(children,

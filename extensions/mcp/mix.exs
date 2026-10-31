@@ -19,7 +19,8 @@ defmodule GenAgentServerMCP.MixProject do
       {:snodo, "~> 0.4.1"},
       {:jason, "~> 1.4"},
       # Test-only, so the tests cover tools for other extensions' operations.
-      {:gen_agent_server_public_source, path: "../public_source", only: :test}
+      {:gen_agent_server_public_source, path: "../public_source", only: :test},
+      {:gen_agent_server_peers, path: "../peers", only: :test}
     ]
   end
 end
