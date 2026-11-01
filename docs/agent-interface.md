@@ -87,7 +87,7 @@ agent_sessions()
 
 | Default | Reason |
 | --- | --- |
-| Inherited access | Native subagents inherit; restricted defaults made agents unable to run checks or reach GitHub (runs 1 to 3). |
+| Inherited access | Native subagents inherit; restricted defaults made agents unable to run checks or reach GitHub (runs 1 to 3). For Claude, inherit means the user's settings, not the creator's mode: with no default mode and no Bash allow rule, a headless session cannot run commands, so run 6 passed `access: auto` to match the creator (run 6). |
 | No turn limit | Native subagents have none. GenAgent's 10-minute watchdog stopped a whole-issue turn (run 5). |
 | Session kept across calls | The server's addition over native tools: a session outlives the caller's conversation. |
 | One route per session | Every procedure run used one provider per turn; multi-route instances added names, not capability. |
@@ -108,6 +108,7 @@ agent_sessions()
 | 3 (claude_wrapper #328) | One instance, three routes. A Claude edit route could not run commands. |
 | 4 (server #137) | Inherited access by default; a live probe reached the network. |
 | 5 (codex_wrapper #154) | One long-lived session per repository, handed a whole issue in one prompt. The 10-minute GenAgent watchdog stopped the first turn after it had pushed and opened a draft PR. With `watchdog_ms: :infinity` (set through `:provider_overrides`), the continuation finished the issue in 19 minutes, CI green. An independent review's findings went back to the same session (same backend session id), which fixed them in 18 minutes. The operator's part was the issue choice, one prompt, the review and verification. |
+| 6 (three patterns, #140 spike) | The `agent` call over the wrappers alone carried three issues in parallel to five ready PRs. Single-use (codex_wrapper #156): one call to a ready PR in 17 minutes; its revision went to fresh sessions. Counterpart (codex_wrapper #150): one session for implement, a cross-review of the other PR that found a defect the Claude reviewer missed, and a revision that opened follow-up #173 on its own. Recursive (claude_wrapper #315): a Claude session started its own Codex reviewer through `agent`, ran two review turns on that session and stopped it. Independent Claude reviews still found defects in every PR. |
 
 ## How much GenAgent it needs
 
@@ -172,6 +173,10 @@ Each runs through `agent` on real backlog work and gets a scorecard row.
 | Recursive | A session started through `agent` starts its own sessions through `agent` (CLI or MCP), for example an implementer starting a reviewer | Inherited access reaching the server itself, session ids passed between agents, no turn limit across levels. |
 
 ## Open questions
+
+- A session's cwd can disappear under it (run 6: a session removed its own worktree; the next turn failed as `{:exit, 2, ""}` with empty stderr). Should `agent` check the cwd per turn and report it by name?
+- A stopped session leaves no record, so a session started by another agent is visible only in that agent's report (run 6). Keep a bounded list of ended sessions with their turns' status and duration?
+- Should the server pass the caller's access mode explicitly, since it cannot see it?
 
 - Should `isolation: worktree` exist, or should the prompt or a helper own worktrees?
 - Is a message without a turn (Codex `send_message`) needed?
