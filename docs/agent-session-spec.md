@@ -1,6 +1,6 @@
 # Agent session spec
 
-Status: draft 0.4.1, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1 to 0.4 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
+Status: draft 0.5, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1 to 0.4 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
 
 Sections 1 to 9 are normative, except where a section says otherwise. Section 10 and the appendices are not normative. The spec assumes a POSIX host: process groups, signals and per-user file permissions.
 
@@ -25,7 +25,11 @@ Out (the caller's job or another layer's):
 - Worktrees, branches and pull requests. The prompt or the caller owns them (runs 5 and 6).
 - Reading provider session archives, summaries, search.
 - Approvals and permission prompts during a turn. Access is fixed when a session starts (section 5.10).
-- Streaming partial output (section 11).
+- Partial response text while a turn runs. A running invocation reports progress without content (section 4.7).
+- Worktrees or other workspace isolation. In runs 5 and 6 the agents created their own worktrees from the prompt. A layer that owned them would take on git, repository layout, branch naming and cleanup, which the host does for Claude Code's `isolation: worktree` but this layer cannot. `cwd` is the interface.
+- Messages that do not start a turn, such as Codex's `send_message`. Such a message waits for the next turn, so a caller gets the same effect by adding it to its next prompt. Mailboxes between agents are orchestration.
+- Enforcing cost or token budgets. The layer reports usage per turn, per session and per session tree (section 4.7). `max_depth` and `max_sessions` bound runaway nesting. Stopping work on a budget is the caller's decision.
+- Routing the host's native subagent tool to the layer. Rewriting a tool call the model chose is invisible to the model, and the plugins and hooks cookbook lists it as an anti-pattern. The skill (section 7.2) teaches when to choose the layer.
 - Remote access from other machines or other users.
 
 ## 3. Conventions and concepts
@@ -120,7 +124,7 @@ No parameters. Result:
 
 ```json
 {
-  "spec_version": "0.4.1",
+  "spec_version": "0.5",
   "layer_version": "...",
   "layer_instance_id": "01J...",
   "started_inside_agent_session": false,
@@ -149,6 +153,7 @@ The values shown are examples. `layer_instance_id` is unique per layer process; 
 | `ended_at` | when terminal | |
 | `duration_ms` | when terminal and started | `ended_at` minus `started_at`. Queue time is excluded. |
 | `provider_session_id` | once known | Reported as soon as the wrapper reports it (W2), including while `running`. |
+| `progress` | while `running`, when the wrapper supports W14 | `{last_activity_at, events, last_event_kind, tools_used}`: when the provider last emitted anything, how many events it has emitted this turn, the kind of the last one (`message`, `tool_call`, `tool_result`, `reasoning` or `other`), and the distinct tool names used so far. It carries no text, arguments or results. |
 | `text` | when `completed` | The provider's final message. Possibly empty. |
 | `usage` | when known | Object of non-negative integers, this turn only (section 5.15). Counter names: `input_tokens`, `output_tokens`, `cached_input_tokens` (cache reads), `cache_write_input_tokens` (cache writes), `reasoning_output_tokens`. A counter the provider does not report is absent. `input_tokens` excludes `cached_input_tokens` and `cache_write_input_tokens`. `output_tokens` includes `reasoning_output_tokens`. The layer converts provider counts to these meanings before computing the differences in 5.15. |
 | `cost_usd` | when the provider reports cost | This turn only. |
@@ -172,7 +177,8 @@ The values shown are examples. `layer_instance_id` is unique per layer process; 
 | `latest` | once an invocation exists | |
 | `usage_total` | when any turn reported usage | Sum of per-turn usage. |
 | `cost_usd_total` | when any turn reported cost | |
-| `ended_at`, `end_reason` | when `ended` | `end_reason` is `stopped`, `idle`, `cleanup_unconfirmed` or `shutdown`. |
+| `tree_usage_total`, `tree_cost_usd_total` | when any turn in the tree reported usage or cost | The session's totals plus those of every descendant session, live or ended, that the layer still holds. |
+| `ended_at`, `end_reason` | when `ended` | `end_reason` is `stopped`, `idle`, `cleanup_unconfirmed` or `shutdown`. A live session that survives a restart is not ended (section 5.20). |
 
 ### 4.8 Errors
 
@@ -214,7 +220,7 @@ A turn's outcome is decided in this order: a valid provider failure report gives
 | `cleaning` | queues | cancels queued; `cleanup: pending`, deadline unchanged | cancels queued; `ended`, `stopped`, cleanup continues | | `idle`, or next queued turn | `ended`, `cleanup_unconfirmed`, queued cancelled |
 | `ended` | `session_ended` | `session_ended` | `session_ended` | | ownership released | ownership kept |
 
-An ended session never returns to another state. Idle expiry (`idle_ms`) applies only in `idle`. Shutdown acts as `agent_stop` on every session, with `end_reason: shutdown`.
+An ended session never returns to another state. Idle expiry (`idle_ms`) applies only in `idle`. Shutdown cancels every running and queued invocation with `detail.by: shutdown`. Sessions are not ended: they come back `idle` after a restart (section 5.20).
 
 ## 5. Semantics
 
@@ -222,7 +228,7 @@ Each rule names the run or review that led to it.
 
 **5.1 One turn at a time.** A session MUST run at most one turn at a time. Two concurrent turns on one provider conversation would fork it.
 
-**5.2 Session ids.** A session id MUST NOT be reused for the lifetime of the layer process, even after its record is evicted. Reuse fails with `session_exists`. Generated ids MUST NOT collide with any id used before. Two concurrent `agent` calls with the same `name` produce exactly one session; the other call fails with `session_exists`. A caller that wants a stable name across layer restarts uses `resume` (section 5.9). Ids are unique only within one layer instance; after a restart the same id can name a different session, which `layer_instance_id` distinguishes. The set of used ids grows with the layer's lifetime; it holds names only.
+**5.2 Session ids.** A session id MUST NOT be reused for the lifetime of the layer process, even after its record is evicted. Reuse fails with `session_exists`. Generated ids MUST NOT collide with any id used before. Two concurrent `agent` calls with the same `name` produce exactly one session; the other call fails with `session_exists`. A session keeps its id across layer restarts (section 5.20). `resume` is for adopting provider sessions the layer did not start. Because sessions persist (section 5.20), ids stay unique across restarts of the same layer state directory. `layer_instance_id` identifies the process, not the namespace. The set of used ids grows with the state directory's life; it holds names only.
 
 **5.3 Provider session ownership.** Within one layer, a provider session id (with its provider) has at most one owner at a time. A session owns its provider session id from the moment the id is known until the session has ended and its last turn's cleanup is confirmed. Ownership is kept independently of session records: eviction never releases it, and it survives a layer restart through the recovery records of section 5.12. Adopting an owned id fails with `provider_session_in_use`. The layer cannot detect use of the same conversation outside itself, such as a person resuming it in a terminal. Callers MUST NOT do that while the layer owns it.
 
@@ -345,11 +351,19 @@ Rules for the steps:
 
 **5.19 Restart and shutdown.**
 
-- **Graceful shutdown.** On a graceful shutdown the layer cancels every running and queued invocation (`detail.by: shutdown`), wakes every waiter, ends every session with `end_reason: shutdown`, and waits up to `cleanup_ms` for cleanup. Process groups still unconfirmed stay recorded for the next start.
+- **Graceful shutdown.** On a graceful shutdown the layer cancels every running and queued invocation (`detail.by: shutdown`), wakes every waiter, persists every session, and waits up to `cleanup_ms` for cleanup. Process groups still unconfirmed stay recorded for the next start.
 - **Crash.** A crashed layer cannot clean up. Before accepting requests, the next layer attempts identity-verified cleanup of every group the crashed one recorded, and restores ownership for every group it cannot confirm (section 5.12). A caller resuming without a new layer start, for example in a terminal, has no such guarantee.
 - **No resend.** A turn interrupted by a restart is never resent automatically.
-- **Recovery.** Provider sessions survive a restart. A caller recovers with `agent` and `resume`, using the `provider_session_id` it saw. The layer reports that id while the first turn runs (W2), so an interrupted first turn stays recoverable.
-- **Persistence.** The layer is not required to persist sessions or records across a restart (section 11).
+- **Recovery.** Sessions come back after a restart as described in section 5.20. A caller can also adopt any provider session with `agent` and `resume`. The layer reports the provider session id while the first turn runs (W2), so an interrupted first turn stays recoverable either way.
+
+**5.20 Persistence.** The layer persists its sessions in its state directory (section 6.2), with mode 0600 and within the bounds of section 5.13. The store holds the session objects, the held invocations with their full results, the ended records, the idempotency keys of section 5.6, and the set of used ids.
+
+- Each accepted submission and each terminal transition is durable before the layer reports it.
+- On start, after recovery (section 5.12), every session that was live comes back `idle`, as a dormant handle. Its next turn resumes its provider session id. It keeps its id, options, parent, counters and held results.
+- A session whose provider session id was never reported cannot be resumed. It comes back ended, with `end_reason: shutdown`.
+- Invocations that were `running` or `queued` come back `cancelled`, with `detail.by: shutdown`, and are never resent.
+- A session whose first turn never reported a provider session id comes back ended.
+- Idle expiry counts from `last_activity_at`, including time the layer was down.
 
 ## 6. Surfaces
 
@@ -454,13 +468,16 @@ What the layer needs from a provider wrapper, stated as capabilities. A wrapper 
 | W11 | Report whether the provider reports cost. | 4.7 |
 | W12 | Check whether a provider session id exists for a working directory, without running a turn. | 5.9 |
 
-Optional: W13, steer or interrupt a turn without ending it. The current operations do not use it (section 11).
+Optional:
+
+- W13: steer or interrupt a turn without ending it. The current operations do not use it (section 11).
+- W14: report provider events while a turn runs, at least their kind and tool names, so the layer can fill `progress` (section 4.7).
 
 A wrapper gap MUST be fixed in the wrapper, not worked around in the layer. Run 6 found two such gaps, codex_wrapper #142 and claude_wrapper #338. Both were already fixed upstream. Both had been hidden by logic that the GenAgent adapters carried themselves.
 
 ## 9. Conformance
 
-An implementation conforms when it passes C1 to C21, against fake CLIs in automated tests, and C1 to C5 and C7 against the real CLIs in a live smoke run. A fake CLI is a test executable that records its argv, environment and stdin, and emits provider-shaped output on cue. A wrapper test double, which reports outcomes and cleanup evidence on cue, is allowed where a scenario says so.
+An implementation conforms when it passes C1 to C24 (C23 when it offers W14), against fake CLIs in automated tests, and C1 to C5 and C7 against the real CLIs in a live smoke run. A fake CLI is a test executable that records its argv, environment and stdin, and emits provider-shaped output on cue. A wrapper test double, which reports outcomes and cleanup evidence on cue, is allowed where a scenario says so.
 
 | Id | Scenario | Checks |
 | --- | --- | --- |
@@ -485,6 +502,9 @@ An implementation conforms when it passes C1 to C21, against fake CLIs in automa
 | C19 | Endpoint and discovery: a request without a token, with a wrong token; a schema violation; two layers started at once; a stale address file; a layer with a different `spec_version` minor version; `AGENT_SESSION_LAYER` set without `AGENT_SESSION_TOKEN`. | HTTP 401 mapped to `unauthorized`; `invalid_args` as a tool result; one layer runs and the other exits; the stale file is replaced; `layer_unavailable`; `layer_unavailable` with no fallback. |
 | C20 | Ownership and access: adopt a provider session owned by a live session; change the user's Claude configuration between two `inherit` turns. | `provider_session_in_use` naming the owner; the second turn sees the new configuration. |
 | C21 | `agent_info` accuracy: submit every listed `provider`, `effort` and `access` value, and one unlisted value of each. | Listed values are accepted; unlisted ones fail with `invalid_option`. |
+| C22 | Persistence: a session with two completed turns, an ended session, and a `queued` invocation; restart the layer gracefully, then kill it and restart. Then send a prompt to the first session, read the ended session's results, and resend an earlier `request_id`. | The first session resumes the same provider session id. The ended session's results are unchanged. The queued invocation is `cancelled` with `detail.by: shutdown` and is never resent. The `request_id` returns the original invocation. Ids are not reused. |
+| C23 | Progress, with a wrapper that supports W14: a fake turn that emits messages and two tool calls, then stalls. | `progress` counts the events, names both tools, and has a `last_activity_at` that stops advancing during the stall. It contains no text. |
+| C24 | Tree totals: a parent with two children and a grandchild, all reporting usage. | `tree_usage_total` of the parent equals the sum over all four. |
 | H1 | Host-integration profile, when offered: `init` on both hosts; from each host, submit through the MCP tools without waiting and make no terminal read. | Tools listed under the plugin's names. Where an identity channel exists: a completion notice reaches the caller by its next turn at the latest, and the brief lists the caller's sessions. With the plugin's hooks disabled, C1 still passes. |
 
 ## 10. Evaluation of the working hypothesis (not normative)
@@ -498,13 +518,7 @@ The hypothesis in section 1 is that a provider wrapper plus a thin layer meets t
 
 ## 11. Open questions
 
-1. **Streaming.** Should `agent_result` offer partial output, or a progress summary (last activity, tools used so far), while a turn runs? Native subagents report only at the end. Run 6 never needed more, but a person watching a long turn might.
-2. **Steering.** Should a prompt submitted during a turn be able to steer it (W13) rather than queue? Codex's app server and Claude's duplex mode can. That needs a live check, and a decision on whether steering is a parameter of `agent` or a separate operation.
-3. **Persistence.** Should sessions and ended records persist across a restart, as dormant handles that resume by provider id on their next prompt, rather than relying on callers to `resume`?
-4. **Isolation.** Should the layer offer a worktree per session, as Claude Code's subagent `isolation: worktree` does, or leave it to prompts as in runs 5 and 6?
-5. **Messages without a turn.** Codex's `send_message` delivers text without starting a turn. Is that needed?
-6. **Budgets.** Should the layer enforce cost or token budgets per session or across sessions, or leave that to callers?
-7. **Native subagent routing.** Should a hook on the host's own subagent tool offer the layer instead? The current answer is no. Rewriting a tool call the model chose is invisible to the model, and the cookbook lists it as an anti-pattern. The skill (7.2) teaches when to choose the layer.
+1. **Steering.** Should a prompt submitted during a turn be able to steer it (W13) rather than queue? Codex's app server and Claude's duplex mode can. Deferred until a live check on both providers. If adopted, it is a separate operation, `agent_steer(session_id, prompt)`, because it changes a running turn rather than creating an invocation. Decided 2026-11-01; the other questions from 0.4.1 were settled and moved into sections 2, 4.7 and 5.20.
 
 ## Appendix A. Mapping to the Elixir wrappers (non-normative)
 
@@ -556,6 +570,16 @@ The operations are shaped after the subagent tools that Claude Code and Codex gi
 As in both native tools, a call has no permission parameter beyond `access`, and there is no turn limit.
 
 ## Appendix D. Changes (non-normative)
+
+### 0.4.1 to 0.5
+
+Owner decisions on the open questions, 2026-11-01:
+
+- **Progress without content.** `progress` on running invocations, with optional wrapper capability W14 (4.7, 8, C23).
+- **Persistence.** Sessions, held results, ended records and idempotency keys persist. Live sessions return as dormant handles that resume by provider id, and interrupted turns are never resent (5.20, C22). Ids are unique across restarts (5.2).
+- **Tree totals.** `tree_usage_total` and `tree_cost_usd_total` (4.7, C24).
+- **Steering.** Deferred until a live check; it would be a separate `agent_steer` operation (11).
+- **Out of scope:** worktree isolation, messages without a turn, budget enforcement, and native subagent routing, each with its reason (2).
 
 ### 0.4 to 0.4.1
 
