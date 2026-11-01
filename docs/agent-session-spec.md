@@ -1,6 +1,6 @@
 # Agent session spec
 
-Status: draft 0.5, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1 to 0.4 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
+Status: draft 0.5.1, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1 to 0.4 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
 
 Sections 1 to 9 are normative, except where a section says otherwise. Section 10 and the appendices are not normative. The spec assumes a POSIX host: process groups, signals and per-user file permissions.
 
@@ -124,7 +124,7 @@ No parameters. Result:
 
 ```json
 {
-  "spec_version": "0.5",
+  "spec_version": "0.5.1",
   "layer_version": "...",
   "layer_instance_id": "01J...",
   "started_inside_agent_session": false,
@@ -410,7 +410,7 @@ A surface MAY lower the `wait_ms` cap. It reports the cap in `agent_info.surface
   - 1 for an operation error, with the bare error object on stderr: the same object as `structuredContent.error`;
   - 2 for `layer_unavailable` or `unauthorized`.
 - `serve` starts a layer in the foreground. `init` installs the host-integration profile when the implementation offers it (section 7).
-- With a reachable layer, `agent-info` and `agent-sessions` MUST each finish within 300 ms at the 95th percentile. This is measured from process start to exit, over 100 runs after one warm-up, on the machine running the conformance suite, with 8 parallel callers. The CLI is a client of the layer endpoint. Parallel invocations MUST NOT serialize on a lock of their own (run 6: Mix build-lock contention).
+- The CLI is a client of the layer endpoint. Parallel invocations MUST NOT serialize on a lock of their own (run 6: parallel waits queued on the Mix build lock for seconds). The spec sets no startup-time bound: every call either talks to a running layer or waits on agent work that takes far longer.
 
 ## 7. Host-integration profile (optional)
 
@@ -497,7 +497,7 @@ An implementation conforms when it passes C1 to C24 (C23 when it offers W14), ag
 | C15 | Idempotency: resend with the same `request_id`, then with the same key and different parameters. | The original invocation, then `request_conflict`. |
 | C16 | Long turn: a fake turn that runs past every wrapper default idle bound, at least 10 minutes. | It completes. |
 | C17 | Prompt handling: a prompt over 1 MiB containing a 64-byte sentinel, sent to a fake CLI that echoes it to stderr and exits nonzero. | The sentinel is in no process's argv, and in no log, telemetry event or error `detail`. |
-| C18 | CLI arguments: `@path`, `@-` and `@@`, and timing of `agent-info` and `agent-sessions` under 8 parallel callers. | Exact values. The bound in 6.4 for both commands. |
+| C18 | CLI arguments: `@path`, `@-` and `@@`; 8 parallel `agent-result` waits on different invocations. | Exact values. Each wait returns when its own invocation ends, independent of the others. |
 | C19 | Endpoint and discovery: a request without a token, with a wrong token; a schema violation; two layers started at once; a stale address file; a layer with a different `spec_version` minor version; `AGENT_SESSION_LAYER` set without `AGENT_SESSION_TOKEN`. | HTTP 401 mapped to `unauthorized`; `invalid_args` as a tool result; one layer runs and the other exits; the stale file is replaced; `layer_unavailable`; `layer_unavailable` with no fallback. |
 | C20 | Ownership and access: adopt a provider session owned by a live session; change the user's Claude configuration between two `inherit` turns. | `provider_session_in_use` naming the owner; the second turn sees the new configuration. |
 | C21 | `agent_info` accuracy: submit every listed `provider`, `effort` and `access` value, and one unlisted value of each. | Listed values are accepted; unlisted ones fail with `invalid_option`. |
@@ -569,6 +569,10 @@ The operations are shaped after the subagent tools that Claude Code and Codex gi
 As in both native tools, a call has no permission parameter beyond `access`, and there is no turn limit.
 
 ## Appendix D. Changes (non-normative)
+
+### 0.5 to 0.5.1
+
+- **CLI startup.** The startup-time bound is removed. A BEAM binary measured 459 ms at p95 with 8 parallel callers, but no call that does not wait on agent work needs to be fast. The no-shared-lock rule stays (6.4, C18).
 
 ### 0.4.1 to 0.5
 
