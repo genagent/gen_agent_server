@@ -32,6 +32,12 @@ defmodule GenAgentServer.MixProject do
       {:gen_agent_ensemble, "~> 0.8.0"},
       {:gen_agent_claude, "~> 0.4.0"},
       {:gen_agent_codex, "~> 0.7.0"},
+      {:claude_wrapper, "~> 0.17.0"},
+      # Spike (#140): codex_wrapper main for Session option parity on resume (#142).
+      {:codex_wrapper,
+       github: "genagent/codex_wrapper_ex",
+       ref: "a8f513f153a63f4a0617efddc2a5807c9ec4b91d",
+       override: true},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.0"}
     ]
