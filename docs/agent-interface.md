@@ -1,5 +1,7 @@
 # Agent interface
 
+The normative version of this interface is [agent-session-spec.md](agent-session-spec.md). This note keeps the history and evidence behind it.
+
 Status: proposed, refined by each procedure run
 ([working-an-issue.md](https://github.com/genagent/gen_agent_server/pull/134)). Updated after every run that
 uses or changes it.
