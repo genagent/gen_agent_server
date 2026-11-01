@@ -32,16 +32,10 @@ defmodule GenAgentServer.MixProject do
       {:gen_agent_ensemble, "~> 0.8.0"},
       {:gen_agent_claude, "~> 0.4.0"},
       {:gen_agent_codex, "~> 0.7.0"},
-      # Spike (#140): claude_wrapper main for false env unsets on the one-shot path (#338).
-      {:claude_wrapper,
-       github: "genagent/claude_wrapper_ex",
-       ref: "4b152589543e7835f1291c48417e6bf779a365e9",
-       override: true},
-      # Spike (#140): codex_wrapper main for Session option parity on resume (#142).
-      {:codex_wrapper,
-       github: "genagent/codex_wrapper_ex",
-       ref: "a8f513f153a63f4a0617efddc2a5807c9ec4b91d",
-       override: true},
+      # gen_agent_claude 0.4.0 caps claude_wrapper below the 0.19.0 env fix (#338).
+      {:claude_wrapper, "~> 0.19.0", override: true},
+      # gen_agent_codex 0.7.0 caps codex_wrapper below the 0.9.0 resume option fix (#142).
+      {:codex_wrapper, "~> 0.9.0", override: true},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.0"}
     ]
