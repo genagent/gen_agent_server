@@ -82,7 +82,7 @@ defmodule GenAgentServerExtensionTest do
     restart_with([])
 
     assert Enum.map(Ops.list(), & &1.name) ==
-             ~w(agents ask cancel create_instance describe_instance instances invocations invoke result status stop_instance)
+             ~w(agent agent_cancel agent_result agent_sessions agent_stop agents ask cancel create_instance describe_instance instances invocations invoke result status stop_instance)
 
     assert {:error, %{code: "unknown_operation"}} = Ops.call("probe")
 
@@ -94,6 +94,8 @@ defmodule GenAgentServerExtensionTest do
              Enum.sort([
                GenAgentServer.Registry,
                GenAgentServer.InstanceSupervisor,
+               GenAgentServer.SessionTasks,
+               GenAgentServer.SessionSupervisor,
                :default_instance
              ])
   end

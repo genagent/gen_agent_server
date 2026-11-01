@@ -22,6 +22,8 @@ defmodule GenAgentServer.Application do
       [
         {Registry, keys: :unique, name: GenAgentServer.Registry},
         {DynamicSupervisor, strategy: :one_for_one, name: GenAgentServer.InstanceSupervisor},
+        {Task.Supervisor, name: GenAgentServer.SessionTasks},
+        {DynamicSupervisor, strategy: :one_for_one, name: GenAgentServer.SessionSupervisor},
         Supervisor.child_spec(
           {GenAgentServer.Instance, name: session_name, agents: agents},
           id: :default_instance,
