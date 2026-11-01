@@ -1,6 +1,6 @@
 # Agent session spec
 
-Status: draft 0.4, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1, 0.2 and 0.3 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
+Status: draft 0.4.1, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1 to 0.4 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
 
 Sections 1 to 9 are normative, except where a section says otherwise. Section 10 and the appendices are not normative. The spec assumes a POSIX host: process groups, signals and per-user file permissions.
 
@@ -120,7 +120,7 @@ No parameters. Result:
 
 ```json
 {
-  "spec_version": "0.4",
+  "spec_version": "0.4.1",
   "layer_version": "...",
   "layer_instance_id": "01J...",
   "started_inside_agent_session": false,
@@ -189,12 +189,12 @@ An error object is `{code, message, detail}`. `message` is one sentence. `detail
 | `request_conflict` | operation | `request_id` was used with different parameters (section 5.6). |
 | `cwd_missing` | operation at acceptance of a new session; invocation when checked before a turn | The working directory does not exist (section 5.11). |
 | `resume_not_found` | operation | The provider has no session with the `resume` id in that `cwd` (section 5.9). |
-| `provider_session_in_use` | operation | The `resume` id is owned by another session in this layer. `detail.owner` names it. |
+| `provider_session_in_use` | operation | The `resume` id is owned in this layer. `detail.owner` names the owning session id, or is `recovery` when the owner is a recovery record from an earlier layer instance. |
 | `too_many_sessions` | operation | Starting a session would exceed `max_sessions`. |
 | `queue_full` | operation | The session already has `max_queued` queued invocations. The running one does not count. |
 | `depth_exceeded` | operation | The new session's depth would exceed `max_depth`. |
 | `provider_unavailable` | operation when the binary is missing or not executable at acceptance; invocation when a spawn fails after acceptance | The CLI cannot start. |
-| `layer_unavailable` | surface | A surface cannot reach or start the layer, or the layer's major spec version differs (section 6.2). |
+| `layer_unavailable` | surface | A surface cannot reach or start the layer, or the layer's `spec_version` is incompatible (section 6.2). |
 | `unauthorized` | surface | A request reached the layer without a valid token (section 6.2). |
 | `turn_failed` | invocation | The provider ran and reported failure. `detail.provider` has its report. |
 | `provider_exit` | invocation | The CLI exited nonzero without a provider failure report, including after a success report, or exited zero without any terminal report. |
@@ -271,18 +271,19 @@ Without `request_id`, a caller that loses a response cannot know whether the pro
 
 **5.12 Cancel and cleanup.** Each turn runs in its own process group (W5). Cancelling a turn MUST stop that process group: the CLI, the tools it started and their descendants that stay in the group. A descendant that leaves the group, for example through `setsid`, is outside this guarantee; reparented processes cannot be tracked portably.
 
-- When the wrapper confirms that the tree has exited, `cleanup` is `confirmed`.
+- Cleanup is confirmed when every member of the turn's process group has exited. Then `cleanup` is `confirmed`.
 - When the wrapper has not confirmed it yet, `cleanup` is `pending`, and the session is in state `cleaning`. While a session is `cleaning`, no turn starts on its provider session; new submissions queue.
 - When the wrapper confirms exit, the session returns to `idle` or starts its next queued turn.
 - If `cleanup_ms` passes without confirmation, the session ends with `end_reason: cleanup_unconfirmed`, and its queued invocations are cancelled with `detail.by: cleanup_unconfirmed`. Its provider session id stays owned (section 5.3) until cleanup is confirmed, including after the record is evicted. A group that is never confirmed keeps ownership for the life of the layer, and the next layer start handles it.
-- When a turn ends normally, the layer stops any descendants still running, as for a cancel. Background processes never outlive the turn that started them. The session is `cleaning` until that is confirmed.
+- When a turn ends normally, the layer stops any members of the turn's process group still running, as for a cancel. Background processes in the group never outlive the turn that started them. The session is `cleaning` until that is confirmed.
 - A stop or shutdown closes admission at once and ends the session, while cleanup continues. Confirmation releases ownership and never reopens the session.
 - Repeated cancels while `cleaning` return `cleanup: pending` and do not reset the deadline.
-- **Recovery records.** For every turn, the layer writes a recovery record to its state directory, and the record is durable before the provider receives the prompt (the prompt goes on stdin, W7, after the record is written). A record holds the group id, the leader's pid and start time, the boot id, the provider and the provider session id once known. The layer removes the record when cleanup is confirmed.
+- **Recovery records.** For every turn, the layer writes a recovery record to its state directory, and the record is durable before the provider receives the prompt (the prompt goes on stdin, W7, after the record is written). A record holds the group id, the leader's pid and start time, the boot id, the provider and the provider session id once known. The layer makes the provider session id durable in the record before it reports that id in any result. The layer removes the record when cleanup is confirmed.
 - **On start.** Before accepting requests, a layer reads the records left by earlier instances:
   - It discards records from an earlier boot.
   - It stops a recorded group only if the group leader is still running with the recorded start time. A numeric group id alone is never enough to signal.
   - It discards the record once the group has exited. Until then, the provider session id in the record stays owned, and adopting it fails with `provider_session_in_use`.
+  - If the leader cannot be verified and the group's exit cannot be established, for example because the leader exited while other members remain, cleanup stays unconfirmed. The layer keeps the record and the ownership, and does not signal the numeric group id. It MAY accept requests unrelated to that provider session.
 
 **5.13 Ended sessions and retention.** A session ends when it is stopped (`stopped`), idle past `idle_ms` (`idle`), unable to confirm cleanup (`cleanup_unconfirmed`), or ended by layer shutdown (`shutdown`).
 
@@ -293,7 +294,7 @@ Without `request_id`, a caller that loses a response cannot know whether the pro
 
 Run 6 is the reason for keeping results after a stop: two reviewer sessions that another agent started and stopped left no trace.
 
-**5.14 Nesting and callers.** A session can call the layer to start sessions of its own (run 6, recursive). For a session whose access permits the tools a surface needs, nesting MUST need no configuration in the child, over every surface that access permits. This does not widen access: a Claude `read_only` session cannot run the CLI or reach MCP servers, so it cannot nest.
+**5.14 Nesting and callers.** A session can call the layer to start sessions of its own (run 6, recursive). For a session whose access permits the tools a surface needs, nesting MUST need no configuration in the child, over every surface that access permits. This does not widen access: a Claude `read_only` session cannot run the CLI or reach MCP servers, and a Codex sandbox that blocks loopback network access cannot reach the endpoint, so neither can nest.
 
 - Each turn's environment carries these variables, and their names are normative:
 
@@ -312,7 +313,7 @@ Run 6 is the reason for keeping results after a stop: two reviewer sessions that
 
 **5.15 Usage per turn.** `usage` on an invocation MUST cover that turn alone.
 
-- If the provider reports per-turn counters, they pass through unchanged.
+- If the provider reports per-turn counters, the layer converts them as in 4.7 and reports them.
 - If the provider reports a running total for the conversation (Codex reports `turn.completed.usage` as the thread's total, including on resumed turns), the layer keeps a baseline per counter and reports the difference.
   - A fresh conversation's baselines start at zero. An adopted conversation's start unknown.
   - A turn whose value for a counter is missing reports no value for that counter and clears its baseline.
@@ -345,7 +346,7 @@ Rules for the steps:
 **5.19 Restart and shutdown.**
 
 - **Graceful shutdown.** On a graceful shutdown the layer cancels every running and queued invocation (`detail.by: shutdown`), wakes every waiter, ends every session with `end_reason: shutdown`, and waits up to `cleanup_ms` for cleanup. Process groups still unconfirmed stay recorded for the next start.
-- **Crash.** A crashed layer cannot clean up. The next layer stops the process groups the crashed one recorded, before it accepts requests (section 5.12). A caller resuming without a new layer start, for example in a terminal, has no such guarantee.
+- **Crash.** A crashed layer cannot clean up. Before accepting requests, the next layer attempts identity-verified cleanup of every group the crashed one recorded, and restores ownership for every group it cannot confirm (section 5.12). A caller resuming without a new layer start, for example in a terminal, has no such guarantee.
 - **No resend.** A turn interrupted by a restart is never resent automatically.
 - **Recovery.** Provider sessions survive a restart. A caller recovers with `agent` and `resume`, using the `provider_session_id` it saw. The layer reports that id while the first turn runs (W2), so an interrupted first turn stays recoverable.
 - **Persistence.** The layer is not required to persist sessions or records across a restart (section 11).
@@ -370,10 +371,10 @@ A surface MAY lower the `wait_ms` cap. It reports the cap in `agent_info.surface
 ### 6.2 The layer endpoint and discovery
 
 - **One layer per user per machine.** The layer holds a POSIX `fcntl` write lock covering the whole of `layer.lock`, next to its address file, for the life of the layer process. The file is never removed or replaced. A second layer that cannot take the lock exits, and whoever started it connects to the first.
-- **Endpoint.** The layer serves the six operations as an MCP server over Streamable HTTP on a loopback address, at `http://127.0.0.1:<port>/mcp`. Tools, schemas, results and errors are as in section 6.3. The endpoint MUST support MCP protocol version 2025-06-18 or later. This endpoint is the interoperability boundary. Any surface can talk to any conforming layer, and a client that speaks MCP can use the endpoint directly.
+- **Endpoint.** The layer serves the six operations as an MCP server over Streamable HTTP on a loopback address, at `http://127.0.0.1:<port>/mcp`. Tools, schemas, results and errors are as in section 6.3. Every layer endpoint and surface MUST support MCP protocol version 2025-06-18, and MAY also support later versions negotiated at MCP initialization. This endpoint is the interoperability boundary. Any surface can talk to any conforming layer, and a client that speaks MCP can use the endpoint directly.
 - **Token.** Every HTTP request carries `Authorization: Bearer <token>`, including initialization and stream requests. The endpoint rejects a missing or invalid token with HTTP 401 before MCP dispatch, with the body `{"error": <error object with code unauthorized>}`. The stdio MCP surface and the CLI map it to `unauthorized` in their own error forms. Other local users can reach a loopback address, so the token is the barrier. It has at least 128 bits of randomness and is generated at each layer start.
 - **Address file.** The layer writes `$XDG_STATE_HOME/agent-session/layer.json`, or `~/.local/state/agent-session/layer.json` when `XDG_STATE_HOME` is unset. The file has mode 0600 and contains `{"endpoint", "token", "spec_version", "layer_instance_id", "pid", "started_at"}`. The layer's state directory, with the process group records of section 5.12, is the same directory.
-- **Discovery.** A surface takes the endpoint and token from `AGENT_SESSION_LAYER` and `AGENT_SESSION_TOKEN` when both are set, and from the address file otherwise.
+- **Discovery.** A surface takes the endpoint and token from `AGENT_SESSION_LAYER` and `AGENT_SESSION_TOKEN` when either is present (section 5.14: both must be nonempty, with no fallback). It reads the address file only when neither is present.
   - An address file whose endpoint does not answer, while `layer.lock` is free, is stale.
   - A surface MUST refuse a layer whose `spec_version` differs in major version, or, while the major version is 0, in minor version, with `layer_unavailable`.
 - **Starting a layer.** If no layer is reachable, the stdio MCP surface MAY start one in the background, wait for its address file, and connect. The CLI MUST NOT start one implicitly. It fails with `layer_unavailable` and names the command that does. A layer outlives whatever started it, so sessions outlive every client (section 5.5).
@@ -444,7 +445,7 @@ What the layer needs from a provider wrapper, stated as capabilities. A wrapper 
 | W2 | Report the provider session id as soon as the provider emits it, before the turn ends. | 4.7, 5.3, 5.19 |
 | W3 | Apply the same model, effort and access options on fresh and resumed turns. | 5.8, 5.10 |
 | W4 | Express `inherit` as in section 5.10: no permission flags, with Codex approval prompts off. Express each narrowing value. | 5.10 |
-| W5 | Run each turn in its own process group, and report the group id, the leader's pid and the leader's start time before the prompt is delivered. Stop the whole group on request, and confirm when every member has exited, also after a turn that ended normally. | 5.12 |
+| W5 | Run each turn in its own process group, and report the group id, the leader's pid and the leader's start time. Then withhold the prompt until the layer releases it, which the layer does only after the recovery record is durable. If the layer's channel to the wrapper closes before release, terminate the group. Stop the whole group on request, and confirm when every member has exited, also after a turn that ended normally. | 5.12 |
 | W6 | Set and unset child environment variables per turn, with unsets honoured on every spawn path. | 5.14, 5.17 |
 | W7 | Deliver the prompt without an argv size limit (stdin or a file), and keep it out of the process table. | 4.1, 5.18 |
 | W8 | Impose no turn timeout unless configured. | 5.16 |
@@ -463,10 +464,10 @@ An implementation conforms when it passes C1 to C21, against fake CLIs in automa
 
 | Id | Scenario | Checks |
 | --- | --- | --- |
-| C1 | Single-use: one `agent` call with a whole task, `agent_result` until terminal, `agent_stop`. | Terminal result. The ended record is readable. No descendant process of the session remains. |
+| C1 | Single-use: one `agent` call with a whole task, `agent_result` until terminal, `agent_stop`. | Terminal result. The ended record is readable. No member of any of the session's turn process groups remains. |
 | C2 | Counterpart: one session, three turns, plus two follow-ups submitted while the second turn runs. | The same provider session id on every turn. The invocations run in submission order. Per-turn usage on each. |
-| C3 | Recursive: a session starts a child session through the MCP surface and through the CLI, with no configuration, using the variables in 5.14. The child runs two turns and is stopped by its parent. | The child's `parent_session_id` and depth. Both children are visible in the same layer and listed with `include_ended`. |
-| C4 | Restart: during a running first turn, after its `provider_session_id` is reported, shut the layer down gracefully while a caller waits on the invocation. Start a new layer and call `agent` with `resume`. Repeat with the layer killed instead, leaving the fake CLI running; then with a recovery record whose leader pid now belongs to an unrelated process. | The waiter receives `cancelled` with `detail.by: shutdown`. The conversation continues and the prompt is not resent. After the kill, the new layer stops the leftover process group before accepting requests, and refuses to adopt its provider session until then. The unrelated process is not signalled. |
+| C3 | Recursive: a parent session, running with an access value that permits running the CLI and reaching the loopback endpoint (live: Claude with `bypass_permissions`), starts a child session of either provider through the MCP surface and through the CLI, with no configuration, using the variables in 5.14. The child runs two turns and is stopped by its parent. | The child's `parent_session_id` and depth. Both children are visible in the same layer and listed with `include_ended`. |
+| C4 | Restart: during a running first turn, after its `provider_session_id` is reported, shut the layer down gracefully while a caller waits on the invocation. Start a new layer and call `agent` with `resume`. Repeat with the layer killed instead, leaving the fake CLI running; then with a recovery record whose leader pid now belongs to an unrelated process; then with a recovered group whose leader exited while a member keeps running. | The waiter receives `cancelled` with `detail.by: shutdown`. The conversation continues and the prompt is not resent. After the kill, the new layer stops the leftover process group before accepting requests, and refuses to adopt its provider session until then. The unrelated process is not signalled. For the exited leader, the layer keeps the record and the ownership, signals nothing, and still serves other sessions. |
 | C5 | Cleanup: cancel a turn whose fake CLI has started a long-running descendant; end a turn normally with a descendant still running; cancel a turn through a wrapper test double that withholds cleanup confirmation. | First two: `cleanup` becomes `confirmed` within `cleanup_ms`, and an observer outside the layer finds no member of the turn's process group left. Third: the session is `cleaning`, new turns wait, and after `cleanup_ms` the session ends with `cleanup_unconfirmed` and keeps ownership, also after its record is evicted. |
 | C6 | Working directory: remove the cwd between turns, then restore it. | `cwd_missing` on that invocation, the CLI not started, and the next turn runs. |
 | C7 | Access: a `read_only` session's resumed turn, and an `inherit` session's turns. | The fake CLI's argv carries the narrowing on the resumed turn. `inherit` passes no permission flags. Live, a write attempt in the `read_only` session fails. |
@@ -555,6 +556,20 @@ The operations are shaped after the subagent tools that Claude Code and Codex gi
 As in both native tools, a call has no permission parameter beyond `access`, and there is no turn limit.
 
 ## Appendix D. Changes (non-normative)
+
+### 0.4 to 0.4.1
+
+From the fourth-round reviews:
+
+- Discovery and the version row now match 5.14 and 6.2.
+- `detail.owner` can be `recovery`.
+- The provider session id is durable before it is reported.
+- Per-turn counters are converted (5.15).
+- C3 fixes its access, and a loopback-blocking Codex sandbox cannot nest.
+- Process-group wording replaces "tree" throughout cleanup.
+- W5 carries the prompt-release handshake.
+- Recovery handles a group whose leader exited (5.12, 5.19, C4).
+- One MCP protocol version every implementation supports (6.2).
 
 ### 0.3 to 0.4
 
