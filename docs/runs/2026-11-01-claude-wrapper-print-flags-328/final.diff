@@ -1,0 +1,1315 @@
+diff --git a/.credo.exs b/.credo.exs
+index 26f42b5..1f821b4 100644
+--- a/.credo.exs
++++ b/.credo.exs
+@@ -5,9 +5,10 @@
+       strict: true,
+       checks: %{
+         extra: [
+-          # The Query struct intentionally maps every `claude` CLI flag, so it
+-          # grows as the CLI does. Headroom kept above the current field count.
+-          {Credo.Check.Warning.StructFieldAmount, max_fields: 56}
++          # The Query struct is a flat mapping of `claude` CLI options, one
++          # field per flag, so it grows as the CLI does (64 fields after the
++          # #328 print flags). Headroom kept above the current field count.
++          {Credo.Check.Warning.StructFieldAmount, max_fields: 70}
+         ]
+       }
+     }
+diff --git a/README.md b/README.md
+index 5057d4c..ab036df 100644
+--- a/README.md
++++ b/README.md
+@@ -22,6 +22,8 @@ The emitted query/resident and command argv are checked against Claude Code
+ `CLAUDE_CONTRACT_VERSION` requiring its exact reported version. The task uses
+ only native version/help and missing-operand parsing; its command construction
+ uses a task-local fake executable and never the selected provider binary.
++Flags newer than a pinned version are checked from the version they are tagged
++with in the task, so an older pinned CLI does not report them as missing.
+ 
+ These are verified compatibility points, not a bisected minimum or a promise of
+ full native semantics. Existing caller-selected `CliVersion` windows remain unchanged.
+@@ -186,6 +188,38 @@ Query.new("Fix the tests")
+ |> Query.execute(Config.new(working_dir: "/path/to/project"))
+ ```
+ 
++### Print flags added for Claude Code 2.1.31x
++
++Each has a setter and a matching `apply_opts/2` key:
++
++| Setter / option | Emits |
++|---|---|
++| `restricted/1`, `restricted: true` | `--restricted` |
++| `permission_prompts/2`, `:host \| :none` | `--permission-prompts host\|none` |
++| `system_prompt_snapshot/2`, `:on \| :off` | `--system-prompt-snapshot on\|off` |
++| `autocompact/2`, `:auto` or a positive integer token count | `--autocompact auto\|<tokens>` |
++| `allow_dangerously_skip_permissions/1` | `--allow-dangerously-skip-permissions` |
++| `chrome/2`, `true \| false` | `--chrome` / `--no-chrome` |
++| `forward_subagent_text/1` | `--forward-subagent-text` |
++| `append_subagent_system_prompt/2` | `--append-subagent-system-prompt <text>` |
++| `append_subagent_system_prompt_file/2` | `--append-subagent-system-prompt-file <path>` |
++| `advisor/2` | `--advisor <value>` |
++| `prompt_suggestions/2`, `true \| false` | `--prompt-suggestions` / `--prompt-suggestions false` |
++| `permission_mode(:manual)` | `--permission-mode manual` |
++| `extra_args/2`, a list of strings | each string as one argv token |
++
++- **Unset means no flag.** `chrome` and `prompt_suggestions` default to `nil`, which emits nothing and leaves the CLI default. `prompt_suggestions(true)` (or `prompt_suggestions/1`) keeps the bare flag; `false` emits `--prompt-suggestions false`. In `apply_opts/2`, `false` is passed through for these two, unlike the other boolean options.
++- **Validation.** An unknown `permission_prompts`, `system_prompt_snapshot` or `permission_mode` atom, and an `autocompact` value other than `:auto` or a positive integer, raise `ArgumentError` when the arguments are built. The CLI validates the token range itself (2.1.316 help gives 100k to 1M).
++- **System-prompt snapshot.** `on` reuses the system prompt recorded for the conversation until compaction (the CLI default, except under `--bare` outside cloud and background sessions); `off` renders it fresh. To change the system prompt of a resumed `Session` turn, pass the new prompt with `system_prompt_snapshot: :off`.
++- **Forwarding subagent text** needs print mode with `--output-format stream-json`. `Query.stream/2` and a `DuplexSession` started with `query:` always use stream-json; `execute/2` uses JSON output and the CLI may reject the flag there.
++- **Bypass.** `allow_dangerously_skip_permissions/1` makes bypass a mode that can be switched to later; it does not turn bypass on. `--dangerously-skip-permissions` stays behind `ClaudeWrapper.DangerousClient`.
++- **`extra_args`** accepts only a list of strings, keeps their order and boundaries, and places them after every `Query` flag and before the `--` prompt separator, so the prompt still goes on stdin or argv as configured. A `"--"` element is rejected. The arguments are not checked against the CLI.
++- **`:default` permission mode** still emits `default` for compatibility.
++
++Version provenance: the issue (#328) reports these flags on Claude Code 2.1.305, 2.1.311 and 2.1.312. They were checked against the help output of an installed 2.1.316, and the three hidden value flags (`--append-subagent-system-prompt`, `--append-subagent-system-prompt-file`, `--advisor`) by their missing-operand errors on 2.1.316. `mix claude.contract` checks flag names only, not values or combinations.
++
++Out of scope: these launch flags are not on `Query` (use `extra_args/2` if needed): `--ax-screen-reader`, `--bg`/`--background`, `--cloud`, `--desktop`, `--environment`, `--ide`, `--remote-control`, `--remote-control-session-name-prefix`, `--teleport`.
++
+ Supporting builders: `ClaudeWrapper.Prompt` (composable prompts with deferred file/git expansion), `ClaudeWrapper.McpConfig` (programmatic `.mcp.json`), and `ClaudeWrapper.ToolPattern` (typed, validated tool specs).
+ 
+ ```elixir
+diff --git a/lib/claude_wrapper.ex b/lib/claude_wrapper.ex
+index 0a03e07..51bf402 100644
+--- a/lib/claude_wrapper.ex
++++ b/lib/claude_wrapper.ex
+@@ -189,6 +189,15 @@ defmodule ClaudeWrapper do
+       surface: `true` or `:full` (drops user + project + local ambient),
+       `:project` (keeps the user's global config). Does not change auth.
+       See `ClaudeWrapper.Query.hermetic/2`.
++    * `:system_prompt_snapshot` - `:on` or `:off`; `:off` renders the system
++      prompt fresh on a resumed conversation. See
++      `ClaudeWrapper.Query.system_prompt_snapshot/2`.
++    * `:prompt_suggestions`, `:chrome` - `true` or `false`, both emitted
++      (`false` as `--prompt-suggestions false` / `--no-chrome`); `nil`
++      leaves the CLI default.
++    * `:extra_args` - a list of strings appended as raw argv after every
++      other flag and before the prompt separator. See
++      `ClaudeWrapper.Query.extra_args/2`.
+ 
+   The list above is the common subset. Any other option accepted by
+   `ClaudeWrapper.Query.apply_opts/2` also works here (for example `:effort`,
+diff --git a/lib/claude_wrapper/duplex_session.ex b/lib/claude_wrapper/duplex_session.ex
+index e2cae99..8a03403 100644
+--- a/lib/claude_wrapper/duplex_session.ex
++++ b/lib/claude_wrapper/duplex_session.ex
+@@ -352,7 +352,15 @@ defmodule ClaudeWrapper.DuplexSession do
+       `apply_opts/2` as the one-shot path; the query's prompt and
+       transport-format flags are ignored (the session owns its
+       stream-json transport and takes prompts per turn via `send/3`).
+-      See `ClaudeWrapper.Query.spawn_args/1`.
++      See `ClaudeWrapper.Query.spawn_args/1`. Every `Query` flag outside
++      the transport set passes through, including `Query.extra_args/2`.
++      For example, to forward subagent text into the session's stream
++      (the CLI accepts `--forward-subagent-text` only with stream-json
++      output, which a duplex session always uses):
++
++          query = Query.new("") |> Query.forward_subagent_text()
++          DuplexSession.start_link(config: config, query: query)
++
+     * `:extra_args` -- extra CLI flags to append, applied after the
+       `:query` flags (e.g. `["--permission-mode", "plan"]`). The
+       escape hatch for flags not yet on `Query`.
+diff --git a/lib/claude_wrapper/query.ex b/lib/claude_wrapper/query.ex
+index 9f35e47..4cad8d6 100644
+--- a/lib/claude_wrapper/query.ex
++++ b/lib/claude_wrapper/query.ex
+@@ -38,12 +38,22 @@ defmodule ClaudeWrapper.Query do
+   }
+ 
+   @type permission_mode ::
+-          :default | :accept_edits | :bypass_permissions | :dont_ask | :plan | :auto
++          :default
++          | :accept_edits
++          | :bypass_permissions
++          | :dont_ask
++          | :plan
++          | :auto
++          | :manual
+ 
+   @type output_format :: :text | :json | :stream_json
+   @type input_format :: :text | :stream_json
+   @type effort :: :low | :medium | :high | :xhigh | :max
+   @type hermetic :: :full | :project
++  @type permission_prompts :: :host | :none
++  @type system_prompt_snapshot :: :on | :off
++  @typedoc "`:auto`, or a positive integer token count."
++  @type autocompact :: :auto | pos_integer()
+ 
+   @type t :: %__MODULE__{
+           prompt: String.t(),
+@@ -91,14 +101,25 @@ defmodule ClaudeWrapper.Query do
+           safe_mode: boolean(),
+           setting_sources: String.t() | nil,
+           tmux: boolean(),
+-          prompt_suggestions: boolean(),
++          prompt_suggestions: boolean() | nil,
+           replay_user_messages: boolean(),
+           bare: boolean(),
+           disable_slash_commands: boolean(),
+           include_hook_events: boolean(),
+           exclude_dynamic_system_prompt_sections: boolean(),
+           hermetic: hermetic() | nil,
+-          prompt_input: :stdin | :argv
++          prompt_input: :stdin | :argv,
++          restricted: boolean(),
++          permission_prompts: permission_prompts() | nil,
++          system_prompt_snapshot: system_prompt_snapshot() | nil,
++          autocompact: autocompact() | nil,
++          allow_dangerously_skip_permissions: boolean(),
++          chrome: boolean() | nil,
++          forward_subagent_text: boolean(),
++          append_subagent_system_prompt: String.t() | nil,
++          append_subagent_system_prompt_file: String.t() | nil,
++          advisor: String.t() | nil,
++          extra_args: [String.t()]
+         }
+ 
+   defstruct [
+@@ -130,7 +151,19 @@ defmodule ClaudeWrapper.Query do
+     :name,
+     :setting_sources,
+     :hermetic,
++    :prompt_suggestions,
++    :permission_prompts,
++    :system_prompt_snapshot,
++    :autocompact,
++    :chrome,
++    :append_subagent_system_prompt,
++    :append_subagent_system_prompt_file,
++    :advisor,
+     prompt_input: :stdin,
++    extra_args: [],
++    restricted: false,
++    allow_dangerously_skip_permissions: false,
++    forward_subagent_text: false,
+     allowed_tools: [],
+     disallowed_tools: [],
+     mcp_config: [],
+@@ -149,7 +182,6 @@ defmodule ClaudeWrapper.Query do
+     worktree: false,
+     brief: false,
+     tmux: false,
+-    prompt_suggestions: false,
+     replay_user_messages: false,
+     bare: false,
+     disable_slash_commands: false,
+@@ -204,7 +236,13 @@ defmodule ClaudeWrapper.Query do
+   @spec max_budget_usd(t(), float()) :: t()
+   def max_budget_usd(%__MODULE__{} = q, budget), do: %{q | max_budget_usd: budget}
+ 
+-  @doc "Set permission mode."
++  @doc """
++  Set permission mode.
++
++  `:manual` emits `manual` (listed in `claude --help` on Claude Code
++  2.1.316). `:default` still emits `default` for compatibility with earlier
++  CLI versions.
++  """
+   @spec permission_mode(t(), permission_mode()) :: t()
+   def permission_mode(%__MODULE__{} = q, mode), do: %{q | permission_mode: mode}
+ 
+@@ -389,10 +427,30 @@ defmodule ClaudeWrapper.Query do
+   @spec tmux(t()) :: t()
+   def tmux(%__MODULE__{} = q), do: %{q | tmux: true}
+ 
+-  @doc "Enable prompt suggestions (`--prompt-suggestions`)."
++  @doc """
++  Enable prompt suggestions (bare `--prompt-suggestions`).
++
++  Same as `prompt_suggestions(q, true)`. See `prompt_suggestions/2` to turn
++  them off explicitly.
++  """
+   @spec prompt_suggestions(t()) :: t()
+   def prompt_suggestions(%__MODULE__{} = q), do: %{q | prompt_suggestions: true}
+ 
++  @doc """
++  Set prompt suggestions explicitly.
++
++    * `true` emits the bare `--prompt-suggestions` flag (as `prompt_suggestions/1`).
++    * `false` emits `--prompt-suggestions false`, turning suggestions off
++      rather than leaving the CLI default in place.
++
++  When never set (the field is `nil`), nothing is emitted and the CLI
++  default applies. The keyword form `prompt_suggestions: false` also emits
++  `--prompt-suggestions false`; `prompt_suggestions: nil` leaves it unset.
++  """
++  @spec prompt_suggestions(t(), boolean()) :: t()
++  def prompt_suggestions(%__MODULE__{} = q, enabled) when is_boolean(enabled),
++    do: %{q | prompt_suggestions: enabled}
++
+   @doc "Re-emit user messages from stdin (`--replay-user-messages`). Mainly for stream/duplex use."
+   @spec replay_user_messages(t()) :: t()
+   def replay_user_messages(%__MODULE__{} = q), do: %{q | replay_user_messages: true}
+@@ -414,6 +472,144 @@ defmodule ClaudeWrapper.Query do
+   def exclude_dynamic_system_prompt_sections(%__MODULE__{} = q),
+     do: %{q | exclude_dynamic_system_prompt_sections: true}
+ 
++  @doc """
++  Run in restricted mode (`--restricted`).
++
++  Listed in `claude --help` on Claude Code 2.1.316; see the CLI help for
++  what the installed version restricts.
++  """
++  @spec restricted(t()) :: t()
++  def restricted(%__MODULE__{} = q), do: %{q | restricted: true}
++
++  @doc """
++  Choose where permission prompts go (`--permission-prompts host|none`).
++
++  `mode` is `:host` or `:none`. Any other value raises `ArgumentError` when
++  the arguments are built.
++  """
++  @spec permission_prompts(t(), permission_prompts()) :: t()
++  def permission_prompts(%__MODULE__{} = q, mode), do: %{q | permission_prompts: mode}
++
++  @doc """
++  Control system-prompt snapshot reuse (`--system-prompt-snapshot on|off`).
++
++  Per `claude --help` on Claude Code 2.1.316:
++
++    * `:on` reuses the system prompt recorded for the conversation until the
++      next compaction. This is the CLI default, except under `--bare`
++      outside cloud and background sessions.
++    * `:off` renders the system prompt fresh for the turn.
++
++  Pass `:off` when resuming a conversation (`resume/2`, or a second
++  `ClaudeWrapper.Session.send/3` turn) with a changed `system_prompt/2`, so
++  the new prompt is not replaced by the recorded one. When unset, nothing
++  is emitted and the CLI default applies. Any other value raises
++  `ArgumentError` when the arguments are built.
++  """
++  @spec system_prompt_snapshot(t(), system_prompt_snapshot()) :: t()
++  def system_prompt_snapshot(%__MODULE__{} = q, mode), do: %{q | system_prompt_snapshot: mode}
++
++  @doc """
++  Set the auto-compaction threshold (`--autocompact auto|<tokens>`).
++
++  `value` is `:auto` or a positive integer token count, emitted in decimal.
++  The CLI validates its supported range (`claude --help` on Claude Code
++  2.1.316 gives 100k to 1M tokens). Any other value raises `ArgumentError`
++  when the arguments are built.
++  """
++  @spec autocompact(t(), autocompact()) :: t()
++  def autocompact(%__MODULE__{} = q, value), do: %{q | autocompact: value}
++
++  @doc """
++  Make permission bypass available without enabling it
++  (`--allow-dangerously-skip-permissions`).
++
++  The session starts in its normal permission mode; bypass becomes a mode
++  that can be switched to later (for example with
++  `ClaudeWrapper.DuplexSession.set_permission_mode/3` and
++  `:bypass_permissions`). This does not emit
++  `--dangerously-skip-permissions`; that flag stays on
++  `dangerously_skip_permissions/1` and the env-gated
++  `ClaudeWrapper.DangerousClient`.
++  """
++  @spec allow_dangerously_skip_permissions(t()) :: t()
++  def allow_dangerously_skip_permissions(%__MODULE__{} = q),
++    do: %{q | allow_dangerously_skip_permissions: true}
++
++  @doc """
++  Turn the Claude in Chrome integration on or off.
++
++  `true` emits `--chrome`; `false` emits `--no-chrome`. When never set (the
++  field is `nil`), neither flag is emitted and the CLI default applies. The
++  keyword form accepts `true`, `false` and `nil` (unset).
++  """
++  @spec chrome(t(), boolean()) :: t()
++  def chrome(%__MODULE__{} = q, enabled) when is_boolean(enabled), do: %{q | chrome: enabled}
++
++  @doc """
++  Forward subagent text into the parent's output stream
++  (`--forward-subagent-text`).
++
++  The CLI accepts this only in print mode with `--output-format
++  stream-json`. `stream/2` and `ClaudeWrapper.DuplexSession` (through its
++  `:query` option) always use stream-json. `execute/2` uses `--output-format
++  json` unless runner options select evidenced execution, so the CLI may
++  reject the flag there.
++  """
++  @spec forward_subagent_text(t()) :: t()
++  def forward_subagent_text(%__MODULE__{} = q), do: %{q | forward_subagent_text: true}
++
++  @doc "Append text to every subagent's system prompt (`--append-subagent-system-prompt`). Hidden from `claude --help`; recognized by Claude Code 2.1.316."
++  @spec append_subagent_system_prompt(t(), String.t()) :: t()
++  def append_subagent_system_prompt(%__MODULE__{} = q, prompt),
++    do: %{q | append_subagent_system_prompt: prompt}
++
++  @doc "Append a file's contents to every subagent's system prompt (`--append-subagent-system-prompt-file`). Hidden from `claude --help`; recognized by Claude Code 2.1.316."
++  @spec append_subagent_system_prompt_file(t(), String.t()) :: t()
++  def append_subagent_system_prompt_file(%__MODULE__{} = q, path),
++    do: %{q | append_subagent_system_prompt_file: path}
++
++  @doc "Set the advisor (`--advisor <value>`). Hidden from `claude --help`; recognized by Claude Code 2.1.316. The value is passed through unchanged."
++  @spec advisor(t(), String.t()) :: t()
++  def advisor(%__MODULE__{} = q, value), do: %{q | advisor: value}
++
++  @doc """
++  Append raw CLI arguments, the escape hatch for flags not yet on `Query`.
++
++  `args` must be a list of strings; anything else raises `ArgumentError`.
++  Each element is one argv token, passed unchanged (no splitting or
++  quoting), and calls accumulate in order. The arguments follow every flag
++  `Query` emits and come before the `--` prompt separator, so the prompt is
++  still delivered on stdin or argv as `prompt_input/2` selects. A `"--"`
++  element is rejected because it would end option parsing before the
++  prompt separator.
++
++  The wrapper does not check these arguments against the CLI; an
++  unsupported flag fails at spawn time like any other CLI error.
++  """
++  @spec extra_args(t(), [String.t()]) :: t()
++  def extra_args(%__MODULE__{} = q, args) do
++    check_extra_args!(args)
++    %{q | extra_args: q.extra_args ++ args}
++  end
++
++  defp check_extra_args!(args) when is_list(args) do
++    cond do
++      not Enum.all?(args, &is_binary/1) ->
++        raise ArgumentError, "extra_args must be a list of strings, got: #{inspect(args)}"
++
++      "--" in args ->
++        raise ArgumentError,
++              "extra_args must not contain \"--\"; the prompt separator is added by Query"
++
++      true ->
++        :ok
++    end
++  end
++
++  defp check_extra_args!(args),
++    do: raise(ArgumentError, "extra_args must be a list of strings, got: #{inspect(args)}")
++
+   @doc """
+   Seal the ambient `~/.claude` config so a programmatic run's surface is
+   exactly what was provided explicitly.
+@@ -498,10 +694,14 @@ defmodule ClaudeWrapper.Query do
+   being duplicated across each surface.
+ 
+   Boolean opts (e.g. `:worktree`, `:dangerously_skip_permissions`)
+-  are applied when the value is `true` and ignored when `false` or `nil`. List
++  are applied when the value is `true` and ignored when `false` or `nil`.
++  `:prompt_suggestions` and `:chrome` are the exception: `false` is applied
++  and emits the CLI's off spelling (`--prompt-suggestions false`,
++  `--no-chrome`), and only `nil` leaves them unset. List
+   opts (e.g. `:allowed_tools`, `:add_dir`) reduce over their list,
+   applying the per-item setter for each entry; a single string is one
+-  entry.
++  entry. `:extra_args` is different: it takes only a list of strings, each
++  one argv token, appended in order (see `extra_args/2`).
+ 
+   ## Examples
+ 
+@@ -547,7 +747,13 @@ defmodule ClaudeWrapper.Query do
+     :betas,
+     :name,
+     :setting_sources,
+-    :prompt_input
++    :prompt_input,
++    :permission_prompts,
++    :system_prompt_snapshot,
++    :autocompact,
++    :append_subagent_system_prompt,
++    :append_subagent_system_prompt_file,
++    :advisor
+   ]
+ 
+   @bool_opts [
+@@ -559,15 +765,21 @@ defmodule ClaudeWrapper.Query do
+     :strict_mcp_config,
+     :include_partial_messages,
+     :tmux,
+-    :prompt_suggestions,
+     :replay_user_messages,
+     :bare,
+     :disable_slash_commands,
+     :include_hook_events,
+     :safe_mode,
+-    :exclude_dynamic_system_prompt_sections
++    :exclude_dynamic_system_prompt_sections,
++    :restricted,
++    :allow_dangerously_skip_permissions,
++    :forward_subagent_text
+   ]
+ 
++  # Flags with an explicit off spelling: `true` and `false` are both applied
++  # (and emitted); `nil` leaves the CLI default.
++  @tristate_opts [:prompt_suggestions, :chrome]
++
+   @list_opts [
+     :allowed_tools,
+     :disallowed_tools,
+@@ -579,7 +791,8 @@ defmodule ClaudeWrapper.Query do
+     :mcp_config
+   ]
+ 
+-  @known_opts @value_opts ++ @bool_opts ++ @list_opts ++ [:worktree, :hermetic]
++  @special_opts [:worktree, :hermetic, :extra_args]
++  @known_opts @value_opts ++ @bool_opts ++ @tristate_opts ++ @list_opts ++ @special_opts
+ 
+   @doc false
+   @spec known_opts() :: [atom()]
+@@ -606,6 +819,16 @@ defmodule ClaudeWrapper.Query do
+   defp apply_opt({key, true}, q) when key in @bool_opts, do: apply(__MODULE__, key, [q])
+   defp apply_opt({key, unset}, q) when key in @bool_opts and unset in [false, nil], do: q
+ 
++  # Tri-state flags: true and false are both explicit; nil leaves them unset.
++  defp apply_opt({key, value}, q) when key in @tristate_opts and is_boolean(value),
++    do: apply(__MODULE__, key, [q, value])
++
++  defp apply_opt({key, nil}, q) when key in @tristate_opts, do: q
++
++  # Raw argv: a validated list of strings, not the single-string list shorthand.
++  defp apply_opt({:extra_args, nil}, q), do: q
++  defp apply_opt({:extra_args, args}, q), do: extra_args(q, args)
++
+   defp apply_opt({:worktree, true}, q), do: worktree(q)
+   defp apply_opt({:worktree, name}, q) when is_binary(name), do: worktree(q, name)
+   defp apply_opt({:worktree, unset}, q) when unset in [false, nil], do: q
+@@ -1580,7 +1803,7 @@ defmodule ClaudeWrapper.Query do
+     |> add_bool("--safe-mode", q.safe_mode)
+     |> add_opt("--setting-sources", q.setting_sources)
+     |> add_bool("--tmux", q.tmux)
+-    |> add_bool("--prompt-suggestions", q.prompt_suggestions)
++    |> add_prompt_suggestions(q.prompt_suggestions)
+     |> add_bool("--replay-user-messages", q.replay_user_messages)
+     |> add_bool("--bare", q.bare)
+     |> add_bool("--disable-slash-commands", q.disable_slash_commands)
+@@ -1589,6 +1812,17 @@ defmodule ClaudeWrapper.Query do
+       "--exclude-dynamic-system-prompt-sections",
+       q.exclude_dynamic_system_prompt_sections
+     )
++    |> add_bool("--restricted", q.restricted)
++    |> add_opt("--permission-prompts", format_permission_prompts(q.permission_prompts))
++    |> add_opt("--system-prompt-snapshot", format_snapshot(q.system_prompt_snapshot))
++    |> add_opt("--autocompact", format_autocompact(q.autocompact))
++    |> add_bool("--allow-dangerously-skip-permissions", q.allow_dangerously_skip_permissions)
++    |> add_chrome(q.chrome)
++    |> add_bool("--forward-subagent-text", q.forward_subagent_text)
++    |> add_opt("--append-subagent-system-prompt", q.append_subagent_system_prompt)
++    |> add_opt("--append-subagent-system-prompt-file", q.append_subagent_system_prompt_file)
++    |> add_opt("--advisor", q.advisor)
++    |> add_extra_args(q.extra_args)
+     |> append_prompt(q.prompt)
+   end
+ 
+@@ -1657,6 +1891,29 @@ defmodule ClaudeWrapper.Query do
+   defp add_betas(args, betas) when is_list(betas), do: add_variadic(args, "--betas", betas)
+   defp add_betas(args, beta) when is_binary(beta), do: add_opt(args, "--betas", beta)
+ 
++  # Unset emits nothing; true keeps the historical bare flag; false is the
++  # explicit off value.
++  defp add_prompt_suggestions(args, nil), do: args
++  defp add_prompt_suggestions(args, true), do: args ++ ["--prompt-suggestions"]
++  defp add_prompt_suggestions(args, false), do: args ++ ["--prompt-suggestions", "false"]
++
++  defp add_prompt_suggestions(_args, other),
++    do: invalid_enum!(:prompt_suggestions, other, [true, false, nil])
++
++  defp add_chrome(args, nil), do: args
++  defp add_chrome(args, true), do: args ++ ["--chrome"]
++  defp add_chrome(args, false), do: args ++ ["--no-chrome"]
++  defp add_chrome(_args, other), do: invalid_enum!(:chrome, other, [true, false, nil])
++
++  # Raw caller argv, last before the prompt separator. Re-checked here so a
++  # struct built without extra_args/2 is held to the same shape.
++  defp add_extra_args(args, []), do: args
++
++  defp add_extra_args(args, extra) do
++    check_extra_args!(extra)
++    args ++ extra
++  end
++
+   defp format_output_format(nil), do: nil
+   defp format_output_format(:text), do: "text"
+   defp format_output_format(:json), do: "json"
+@@ -1678,15 +1935,40 @@ defmodule ClaudeWrapper.Query do
+   defp format_permission_mode(:dont_ask), do: "dontAsk"
+   defp format_permission_mode(:plan), do: "plan"
+   defp format_permission_mode(:auto), do: "auto"
++  defp format_permission_mode(:manual), do: "manual"
+ 
+   defp format_permission_mode(other),
+     do:
+       invalid_enum!(
+         :permission_mode,
+         other,
+-        [:default, :accept_edits, :bypass_permissions, :dont_ask, :plan, :auto]
++        [:default, :accept_edits, :bypass_permissions, :dont_ask, :plan, :auto, :manual]
+       )
+ 
++  defp format_permission_prompts(nil), do: nil
++  defp format_permission_prompts(:host), do: "host"
++  defp format_permission_prompts(:none), do: "none"
++
++  defp format_permission_prompts(other),
++    do: invalid_enum!(:permission_prompts, other, [:host, :none])
++
++  defp format_snapshot(nil), do: nil
++  defp format_snapshot(:on), do: "on"
++  defp format_snapshot(:off), do: "off"
++  defp format_snapshot(other), do: invalid_enum!(:system_prompt_snapshot, other, [:on, :off])
++
++  # The CLI validates the supported range; only the shape is checked here.
++  defp format_autocompact(nil), do: nil
++  defp format_autocompact(:auto), do: "auto"
++
++  defp format_autocompact(tokens) when is_integer(tokens) and tokens > 0,
++    do: Integer.to_string(tokens)
++
++  defp format_autocompact(other) do
++    raise ArgumentError,
++          "invalid autocompact #{inspect(other)}; expected :auto or a positive integer token count"
++  end
++
+   defp format_effort(nil), do: nil
+   defp format_effort(:low), do: "low"
+   defp format_effort(:medium), do: "medium"
+diff --git a/lib/claude_wrapper/session.ex b/lib/claude_wrapper/session.ex
+index 0c9f8a1..745d8ed 100644
+--- a/lib/claude_wrapper/session.ex
++++ b/lib/claude_wrapper/session.ex
+@@ -51,6 +51,10 @@ defmodule ClaudeWrapper.Session do
+     * `:permission_mode` - Permission mode
+     * `:max_budget_usd` - Budget limit
+     * `:effort` - Effort level
++    * `:system_prompt_snapshot` - `:on` or `:off`; see "Changing the
++      system prompt" in `send/3`
++
++  Options given to `send/3` override these for that turn.
+   """
+   @spec new(Config.t(), keyword()) :: t()
+   def new(%Config{} = config, opts \\ []) do
+@@ -75,6 +79,29 @@ defmodule ClaudeWrapper.Session do
+   `Prompt` is rendered (which expands attached files and git diffs)
+   before the turn runs; a render failure short-circuits to
+   `{:error, %ClaudeWrapper.Error{}}` without launching the CLI.
++
++  `opts` are `ClaudeWrapper.Query.apply_opts/2` options merged over the
++  session's own options for this turn only; a per-call value wins.
++
++  ## Changing the system prompt
++
++  A resumed conversation reuses the system prompt recorded for it until the
++  next compaction (the CLI's `--system-prompt-snapshot on` default), so a
++  changed `:system_prompt` on a later turn may not reach the model. Pass
++  `system_prompt_snapshot: :off` with the new prompt to have the CLI render
++  it fresh:
++
++      {:ok, session, _} = Session.send(session, "first", system_prompt: "Be terse.")
++
++      {:ok, session, _} =
++        Session.send(session, "second",
++          system_prompt: "Answer in French.",
++          system_prompt_snapshot: :off
++        )
++
++  The second turn's argv carries `--resume <id>`, the new
++  `--system-prompt` and `--system-prompt-snapshot off`. When the option is
++  unset, nothing is emitted and the CLI default applies.
+   """
+   @spec send(t(), String.t() | Prompt.t(), keyword()) ::
+           {:ok, t(), Result.t()} | {:error, Error.t()}
+diff --git a/lib/mix/tasks/claude.contract.ex b/lib/mix/tasks/claude.contract.ex
+index 6608b50..9c5e8d6 100644
+--- a/lib/mix/tasks/claude.contract.ex
++++ b/lib/mix/tasks/claude.contract.ex
+@@ -33,9 +33,32 @@ defmodule Mix.Tasks.Claude.Contract do
+ 
+   @requirements ["app.start"]
+ 
+-  # These required-value flags are hidden on 2.1.309. A missing-operand
+-  # parse error proves recognition on each run, rather than waiving drift.
+-  @hidden_value_flags ~w(--max-turns --system-prompt-file --append-system-prompt-file --permission-prompt-tool --max-thinking-tokens)
++  # These required-value flags are hidden from help (the first five on
++  # 2.1.309, the subagent prompt and advisor flags on 2.1.316). A
++  # missing-operand parse error proves recognition on each run, rather than
++  # waiving drift.
++  @hidden_value_flags ~w(--max-turns --system-prompt-file --append-system-prompt-file --permission-prompt-tool --max-thinking-tokens --append-subagent-system-prompt --append-subagent-system-prompt-file --advisor)
++
++  @doc false
++  @spec hidden_value_flags() :: [String.t()]
++  def hidden_value_flags, do: @hidden_value_flags
++
++  # Flags checked only when the reported CLI version is at or after the
++  # given version; on an older CLI they are neither looked up in help nor
++  # probed. Each version is the first one the flag is checked on (a pinned
++  # CI version where it was seen), not a bisected introduction version.
++  # Untagged flags are checked on every version.
++  @checked_from %{
++    "--restricted" => "2.1.309",
++    "--permission-prompts" => "2.1.309",
++    "--system-prompt-snapshot" => "2.1.309",
++    "--autocompact" => "2.1.309",
++    "--append-subagent-system-prompt-file" => "2.1.309"
++  }
++
++  @doc false
++  @spec checked_from() :: %{String.t() => String.t()}
++  def checked_from, do: @checked_from
+ 
+   @impl true
+   def run(_argv) do
+@@ -46,7 +69,7 @@ defmodule Mix.Tasks.Claude.Contract do
+     {version, 0} = System.cmd(binary, ["--version"], stderr_to_stdout: true)
+     verify_version!(String.trim(version), System.get_env("CLAUDE_CONTRACT_VERSION"))
+     Mix.shell().info(String.trim(version))
+-    findings = check(binary)
++    findings = check(binary, specs(), reported_version(version))
+ 
+     if findings == [] do
+       Mix.shell().info(
+@@ -59,9 +82,33 @@ defmodule Mix.Tasks.Claude.Contract do
+   end
+ 
+   @doc false
+-  @spec check(String.t(), [{[String.t()], [String.t()]}]) :: [String.t()]
+-  def check(binary, commands \\ specs()) do
+-    Enum.flat_map(commands, fn {subcommand, args} -> check_command(binary, subcommand, args) end)
++  # `version` is the reported CLI version ("2.1.220"); nil checks every
++  # flag, including tagged ones.
++  @spec check(String.t(), [{[String.t()], [String.t()]}], String.t() | nil) :: [String.t()]
++  def check(binary, commands \\ specs(), version \\ nil) do
++    Enum.flat_map(commands, fn {subcommand, args} ->
++      check_command(binary, subcommand, args, version)
++    end)
++  end
++
++  @doc false
++  # The first x.y.z in `claude --version` output ("2.1.220 (Claude Code)"),
++  # or nil when there is none.
++  @spec reported_version(String.t()) :: String.t() | nil
++  def reported_version(output) do
++    case Regex.run(~r/\b(\d+\.\d+\.\d+)\b/, output, capture: :all_but_first) do
++      [version] -> version
++      nil -> nil
++    end
++  end
++
++  defp checked_on?(_flag, nil), do: true
++
++  defp checked_on?(flag, version) do
++    case Map.fetch(@checked_from, flag) do
++      {:ok, from} -> Elixir.Version.compare(version, from) != :lt
++      :error -> true
++    end
+   end
+ 
+   defp verify_version!(_reported, nil), do: :ok
+@@ -71,7 +118,7 @@ defmodule Mix.Tasks.Claude.Contract do
+       do: Mix.raise("expected claude #{expected}, got: #{reported}")
+   end
+ 
+-  defp check_command(binary, subcommand, args) do
++  defp check_command(binary, subcommand, args, version) do
+     {help, code} = System.cmd(binary, subcommand ++ ["--help"], stderr_to_stdout: true)
+ 
+     expected =
+@@ -84,6 +131,8 @@ defmodule Mix.Tasks.Claude.Contract do
+     else
+       args
+       |> emitted_flags()
++      # Filtered before listed?/4, so a skipped flag is not probed either.
++      |> Enum.filter(&checked_on?(&1, version))
+       |> Enum.reject(&listed?(binary, &1, documented, subcommand))
+       |> Enum.map(&"#{Enum.join(subcommand, " ")}: emitted #{&1} is not documented")
+     end
+@@ -211,25 +260,48 @@ defmodule Mix.Tasks.Claude.Contract do
+       bare: true,
+       disable_slash_commands: true,
+       include_hook_events: true,
+-      exclude_dynamic_system_prompt_sections: true
++      exclude_dynamic_system_prompt_sections: true,
++      restricted: true,
++      permission_prompts: :host,
++      system_prompt_snapshot: :off,
++      autocompact: 200_000,
++      allow_dangerously_skip_permissions: true,
++      chrome: true,
++      forward_subagent_text: true,
++      append_subagent_system_prompt: "contract",
++      append_subagent_system_prompt_file: "/tmp/subagent",
++      advisor: "contract"
+     )
+   end
+ 
+-  defp specs do
++  # Specimens for the flags whose other spelling the maximal query cannot
++  # carry at the same time.
++  @doc false
++  @spec alternate_queries() :: [Query.t()]
++  def alternate_queries do
++    [
++      # build_args/1 rejects --continue with --resume.
++      Query.new("contract prompt") |> Query.continue_session(),
++      # --no-chrome and the explicit prompt-suggestions off value.
++      Query.new("contract prompt") |> Query.chrome(false) |> Query.prompt_suggestions(false)
++    ]
++  end
++
++  @doc false
++  @spec query_specs() :: [{[String.t()], [String.t()]}]
++  def query_specs do
+     query = maximal_query()
+-    query_args = Query.build_args(query)
+-    # build_args/1 rejects --continue with --resume, so --continue is checked
+-    # on its own query.
+-    continue_args =
+-      "contract prompt" |> Query.new() |> Query.continue_session() |> Query.build_args()
+ 
+     spawn_args =
+       Query.spawn_args(query) ++
+         ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+ 
+-    [{[], query_args}, {[], continue_args}, {[], spawn_args}] ++ command_specs()
++    [{[], Query.build_args(query)}] ++
++      Enum.map(alternate_queries(), &{[], Query.build_args(&1)}) ++ [{[], spawn_args}]
+   end
+ 
++  defp specs, do: query_specs() ++ command_specs()
++
+   defp command_specs do
+     [
+       {["auth", "status"], &Auth.status/1},
+diff --git a/test/claude_wrapper/duplex_session/control_test.exs b/test/claude_wrapper/duplex_session/control_test.exs
+index 13aaef5..d2e41ca 100644
+--- a/test/claude_wrapper/duplex_session/control_test.exs
++++ b/test/claude_wrapper/duplex_session/control_test.exs
+@@ -620,6 +620,10 @@ defmodule ClaudeWrapper.DuplexSession.ControlTest do
+         {&DuplexSession.set_permission_mode(&1, :accept_edits),
+          %{"subtype" => "set_permission_mode", "mode" => "acceptEdits"},
+          %{"mode" => "acceptEdits"}, :ok},
++        {&DuplexSession.set_permission_mode(&1, :manual),
++         %{"subtype" => "set_permission_mode", "mode" => "manual"}, %{"mode" => "manual"}, :ok},
++        {&DuplexSession.set_permission_mode(&1, :default),
++         %{"subtype" => "set_permission_mode", "mode" => "default"}, %{"mode" => "default"}, :ok},
+         {&DuplexSession.set_max_thinking_tokens(&1, 1024),
+          %{"subtype" => "set_max_thinking_tokens", "max_thinking_tokens" => 1024}, nil, :ok},
+         {&DuplexSession.set_max_thinking_tokens(&1, nil),
+diff --git a/test/claude_wrapper/duplex_session_test.exs b/test/claude_wrapper/duplex_session_test.exs
+index 300de4c..d400f2f 100644
+--- a/test/claude_wrapper/duplex_session_test.exs
++++ b/test/claude_wrapper/duplex_session_test.exs
+@@ -871,6 +871,31 @@ defmodule ClaudeWrapper.DuplexSessionTest do
+       assert model_idx < perm_idx
+     end
+ 
++    test "forward_subagent_text and the other #328 flags reach the spawn args" do
++      query =
++        Query.new("")
++        |> Query.forward_subagent_text()
++        |> Query.permission_mode(:manual)
++        |> Query.system_prompt_snapshot(:off)
++        |> Query.chrome(false)
++        |> Query.extra_args(["--query-extra"])
++
++      args = capture_args(query: query, extra_args: ["--session-extra"])
++
++      assert "--forward-subagent-text" in args
++      assert ["--permission-mode", "manual"] |> contiguous?(args)
++      assert ["--system-prompt-snapshot", "off"] |> contiguous?(args)
++      assert "--no-chrome" in args
++      # The flag is only valid with stream-json output, which the session fixes.
++      assert ["--output-format", "stream-json"] |> contiguous?(args)
++
++      # Query extra_args come with the query args, before the session's own.
++      query_idx = Enum.find_index(args, &(&1 == "--query-extra"))
++      session_idx = Enum.find_index(args, &(&1 == "--session-extra"))
++      assert query_idx < session_idx
++      refute "--" in args
++    end
++
+     test "without a :query the args are unchanged from the plain transport set" do
+       args = capture_args([])
+ 
+diff --git a/test/claude_wrapper/query_test.exs b/test/claude_wrapper/query_test.exs
+index 7f16bfa..3c7c47f 100644
+--- a/test/claude_wrapper/query_test.exs
++++ b/test/claude_wrapper/query_test.exs
+@@ -636,4 +636,272 @@ defmodule ClaudeWrapper.QueryTest do
+                4096
+     end
+   end
++
++  describe "remaining print flags (#328)" do
++    @new_flags ~w(--restricted --permission-prompts --system-prompt-snapshot --autocompact
++                  --allow-dangerously-skip-permissions --chrome --no-chrome
++                  --forward-subagent-text --append-subagent-system-prompt
++                  --append-subagent-system-prompt-file --advisor)
++
++    defp args_for(opts), do: "p" |> Query.new() |> Query.apply_opts(opts) |> Query.build_args()
++
++    test "unset fields emit none of the new flags" do
++      args = Query.build_args(Query.new("p"))
++
++      for flag <- @new_flags, do: refute(flag in args, "#{flag} emitted while unset")
++      refute "--prompt-suggestions" in args
++
++      q = Query.new("p")
++      assert q.chrome == nil
++      assert q.prompt_suggestions == nil
++      assert q.extra_args == []
++    end
++
++    test "each setter emits its exact operands" do
++      args =
++        Query.new("p")
++        |> Query.restricted()
++        |> Query.permission_prompts(:none)
++        |> Query.system_prompt_snapshot(:off)
++        |> Query.autocompact(250_000)
++        |> Query.allow_dangerously_skip_permissions()
++        |> Query.chrome(true)
++        |> Query.forward_subagent_text()
++        |> Query.append_subagent_system_prompt("sub text")
++        |> Query.append_subagent_system_prompt_file("/sub.txt")
++        |> Query.advisor("opus")
++        |> Query.build_args()
++
++      assert "--restricted" in args
++      assert subsequence?(["--permission-prompts", "none"], args)
++      assert subsequence?(["--system-prompt-snapshot", "off"], args)
++      assert subsequence?(["--autocompact", "250000"], args)
++      assert "--allow-dangerously-skip-permissions" in args
++      assert "--chrome" in args
++      refute "--no-chrome" in args
++      assert "--forward-subagent-text" in args
++      assert subsequence?(["--append-subagent-system-prompt", "sub text"], args)
++      assert subsequence?(["--append-subagent-system-prompt-file", "/sub.txt"], args)
++      assert subsequence?(["--advisor", "opus"], args)
++      assert Enum.take(args, -2) == ["--", "p"]
++    end
++
++    test "each keyword option routes to its setter" do
++      args =
++        args_for(
++          restricted: true,
++          permission_prompts: :host,
++          system_prompt_snapshot: :on,
++          autocompact: :auto,
++          allow_dangerously_skip_permissions: true,
++          chrome: false,
++          forward_subagent_text: true,
++          append_subagent_system_prompt: "a",
++          append_subagent_system_prompt_file: "/b",
++          advisor: "c",
++          extra_args: ["--x", "1"]
++        )
++
++      assert "--restricted" in args
++      assert subsequence?(["--permission-prompts", "host"], args)
++      assert subsequence?(["--system-prompt-snapshot", "on"], args)
++      assert subsequence?(["--autocompact", "auto"], args)
++      assert "--allow-dangerously-skip-permissions" in args
++      assert "--no-chrome" in args
++      refute "--chrome" in args
++      assert "--forward-subagent-text" in args
++      assert subsequence?(["--append-subagent-system-prompt", "a"], args)
++      assert subsequence?(["--append-subagent-system-prompt-file", "/b"], args)
++      assert subsequence?(["--advisor", "c"], args)
++      assert subsequence?(["--x", "1", "--", "p"], args)
++    end
++
++    test "boolean keyword options ignore false and nil" do
++      args =
++        args_for(
++          restricted: false,
++          allow_dangerously_skip_permissions: nil,
++          forward_subagent_text: false
++        )
++
++      refute "--restricted" in args
++      refute "--allow-dangerously-skip-permissions" in args
++      refute "--forward-subagent-text" in args
++    end
++
++    test "allow_dangerously_skip_permissions does not enable bypass" do
++      args = args_for(allow_dangerously_skip_permissions: true)
++
++      assert "--allow-dangerously-skip-permissions" in args
++      refute "--dangerously-skip-permissions" in args
++      refute "--permission-mode" in args
++    end
++
++    test "chrome: true/false/nil" do
++      assert "--chrome" in args_for(chrome: true)
++      assert "--no-chrome" in args_for(chrome: false)
++
++      unset = args_for(chrome: nil)
++      refute "--chrome" in unset
++      refute "--no-chrome" in unset
++
++      assert "--no-chrome" in (Query.new("p") |> Query.chrome(false) |> Query.build_args())
++
++      assert_raise ArgumentError, ~r/invalid value "yes" for option :chrome/, fn ->
++        args_for(chrome: "yes")
++      end
++    end
++
++    test "prompt_suggestions: unset, true (bare flag) and false (explicit value)" do
++      refute "--prompt-suggestions" in args_for([])
++      refute "--prompt-suggestions" in args_for(prompt_suggestions: nil)
++
++      bare = Query.new("p") |> Query.prompt_suggestions() |> Query.build_args()
++      assert subsequence?(["--prompt-suggestions", "--"], bare)
++
++      assert subsequence?(["--prompt-suggestions", "--"], args_for(prompt_suggestions: true))
++
++      explicit_true = Query.new("p") |> Query.prompt_suggestions(true) |> Query.build_args()
++      assert subsequence?(["--prompt-suggestions", "--"], explicit_true)
++
++      off = Query.new("p") |> Query.prompt_suggestions(false) |> Query.build_args()
++      assert subsequence?(["--prompt-suggestions", "false"], off)
++      assert subsequence?(["--prompt-suggestions", "false"], args_for(prompt_suggestions: false))
++
++      assert_raise ArgumentError, ~r/:prompt_suggestions/, fn ->
++        args_for(prompt_suggestions: "false")
++      end
++    end
++
++    test "invalid enum values raise through invalid_enum!" do
++      assert_raise ArgumentError, ~r/invalid permission_prompts :ask; expected one of/, fn ->
++        args_for(permission_prompts: :ask)
++      end
++
++      assert_raise ArgumentError, ~r/invalid system_prompt_snapshot "off"; expected one of/, fn ->
++        args_for(system_prompt_snapshot: "off")
++      end
++    end
++
++    test "autocompact accepts :auto and any positive integer, emitted in decimal" do
++      assert subsequence?(["--autocompact", "auto"], args_for(autocompact: :auto))
++      assert subsequence?(["--autocompact", "1"], args_for(autocompact: 1))
++      assert subsequence?(["--autocompact", "200"], args_for(autocompact: 200))
++      assert subsequence?(["--autocompact", "100000"], args_for(autocompact: 100_000))
++      assert subsequence?(["--autocompact", "2000000"], args_for(autocompact: 2_000_000))
++    end
++
++    test "autocompact rejects non-positive and malformed values" do
++      for value <- [0, -1, 150_000.0, "200000", :manual] do
++        assert_raise ArgumentError, ~r/invalid autocompact/, fn ->
++          args_for(autocompact: value)
++        end
++      end
++    end
++
++    test "permission_mode :manual emits manual and :default still emits default" do
++      assert subsequence?(["--permission-mode", "manual"], args_for(permission_mode: :manual))
++      assert subsequence?(["--permission-mode", "default"], args_for(permission_mode: :default))
++      assert Query.permission_mode_arg(:manual) == "manual"
++
++      assert_raise ArgumentError, ~r/:manual\]/, fn -> args_for(permission_mode: :nope) end
++    end
++
++    test "the new flags survive spawn_args (the duplex path)" do
++      args =
++        Query.new("p")
++        |> Query.forward_subagent_text()
++        |> Query.system_prompt_snapshot(:off)
++        |> Query.chrome(false)
++        |> Query.advisor("opus")
++        |> Query.extra_args(["--late", "v"])
++        |> Query.spawn_args()
++
++      assert "--forward-subagent-text" in args
++      assert subsequence?(["--system-prompt-snapshot", "off"], args)
++      assert "--no-chrome" in args
++      assert subsequence?(["--advisor", "opus"], args)
++      assert Enum.take(args, -2) == ["--late", "v"]
++      refute "--" in args
++      refute "p" in args
++    end
++  end
++
++  describe "extra_args (#328)" do
++    test "preserves order and token boundaries and sits right before the separator" do
++      args =
++        Query.new("the prompt")
++        |> Query.model("sonnet")
++        |> Query.extra_args(["--flag one", "two"])
++        |> Query.extra_args(["--three"])
++        |> Query.build_args()
++
++      assert Enum.take(args, -5) == ["--flag one", "two", "--three", "--", "the prompt"]
++    end
++
++    test "keyword lists accumulate across repeated keys" do
++      q = Query.apply_opts(Query.new("p"), extra_args: ["--a"], extra_args: ["--b", "c"])
++      assert q.extra_args == ["--a", "--b", "c"]
++      assert Query.apply_opts(Query.new("p"), extra_args: nil).extra_args == []
++    end
++
++    test "rejects anything other than a list of strings" do
++      for value <- ["--a", [:a], ["--a", 1], %{a: 1}, :a] do
++        assert_raise ArgumentError, ~r/extra_args must be a list of strings/, fn ->
++          Query.apply_opts(Query.new("p"), extra_args: value)
++        end
++
++        assert_raise ArgumentError, ~r/extra_args must be a list of strings/, fn ->
++          Query.extra_args(Query.new("p"), value)
++        end
++      end
++    end
++
++    test "rejects a -- element" do
++      assert_raise ArgumentError, ~r/must not contain "--"/, fn ->
++        Query.extra_args(Query.new("p"), ["--a", "--", "x"])
++      end
++    end
++
++    test "a struct field set directly is checked when the arguments are built" do
++      assert_raise ArgumentError, ~r/extra_args must be a list of strings/, fn ->
++        Query.build_args(%{Query.new("p") | extra_args: [1]})
++      end
++    end
++
++    test "the prompt is still delivered through argv and stdin" do
++      dir = Path.join(System.tmp_dir!(), "extra-args-#{System.unique_integer([:positive])}")
++
++      File.mkdir_p!(dir)
++      on_exit(fn -> File.rm_rf!(dir) end)
++      fake = Path.join(dir, "claude")
++      out = Path.join(dir, "out")
++
++      # Records argv (one per line) and, when no `--` separator is present
++      # (stdin delivery), stdin; then prints a result.
++      File.write!(fake, """
++      #!/bin/sh
++      printf '%s\\n' "$@" > '#{out}.argv'
++      case " $* " in
++        *" -- "*) : > '#{out}.stdin' ;;
++        *) cat > '#{out}.stdin' ;;
++      esac
++      printf '{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s","duration_ms":1,"num_turns":1,"total_cost_usd":0}\\n'
++      """)
++
++      File.chmod!(fake, 0o755)
++      config = ClaudeWrapper.Config.new(binary: fake)
++      query = Query.new("hello there") |> Query.extra_args(["--extra", "v"])
++
++      assert {:ok, _} = Query.execute(query, config)
++      argv = File.read!(out <> ".argv") |> String.split("\n", trim: true)
++      assert Enum.take(argv, -2) == ["--extra", "v"]
++      refute "hello there" in argv
++      assert File.read!(out <> ".stdin") == "hello there"
++
++      assert {:ok, _} = Query.execute(Query.prompt_input(query, :argv), config)
++      argv = File.read!(out <> ".argv") |> String.split("\n", trim: true)
++      assert Enum.take(argv, -4) == ["--extra", "v", "--", "hello there"]
++    end
++  end
+ end
+diff --git a/test/claude_wrapper/session_selector_test.exs b/test/claude_wrapper/session_selector_test.exs
+index 15cc54a..15ae4af 100644
+--- a/test/claude_wrapper/session_selector_test.exs
++++ b/test/claude_wrapper/session_selector_test.exs
+@@ -44,4 +44,60 @@ defmodule ClaudeWrapper.SessionSelectorTest do
+     assert turn1 =~ "--session-id #{@uuid}"
+     refute turn1 =~ "--resume"
+   end
++
++  # Two turns where the second passes per-call options; returns each argv.
++  defp two_turns_with(session_opts, turn2_opts) do
++    calls = Path.join(System.tmp_dir!(), "session-snap-#{System.unique_integer([:positive])}")
++    on_exit(fn -> File.rm(calls) end)
++
++    config =
++      Config.new(
++        binary: @fake,
++        env: [{"FAKE_CLAUDE_SCENARIO", "object"}, {"FAKE_CLAUDE_CALLS", calls}]
++      )
++
++    session = Session.new(config, session_opts)
++    {:ok, session, _} = Session.send(session, "turn 1")
++    {:ok, _session, _} = Session.send(session, "turn 2", turn2_opts)
++
++    calls |> File.read!() |> String.split("\n", trim: true)
++  end
++
++  # Argv regression only: the fake CLI cannot show which system prompt the
++  # real CLI sends to the API (#328).
++  describe "changing the system prompt on a resumed turn (#328)" do
++    test "turn two carries --resume, the new prompt and --system-prompt-snapshot off" do
++      [turn1, turn2] =
++        two_turns_with([system_prompt: "first-prompt"],
++          system_prompt: "second-prompt",
++          system_prompt_snapshot: :off
++        )
++
++      assert turn1 =~ "--system-prompt first-prompt"
++      refute turn1 =~ "--system-prompt-snapshot"
++
++      assert turn2 =~ "--resume fake-session"
++      assert turn2 =~ "--system-prompt second-prompt"
++      refute turn2 =~ "first-prompt"
++      assert turn2 =~ "--system-prompt-snapshot off"
++    end
++
++    test "a per-call snapshot value overrides the session's" do
++      [turn1, turn2] = two_turns_with([system_prompt_snapshot: :on], system_prompt_snapshot: :off)
++
++      assert turn1 =~ "--system-prompt-snapshot on"
++      assert turn2 =~ "--system-prompt-snapshot off"
++      refute turn2 =~ "--system-prompt-snapshot on"
++    end
++
++    test "a session-level :off applies to every turn, and unset emits nothing" do
++      [turn1, turn2] = two_turns_with([system_prompt_snapshot: :off], [])
++      assert turn1 =~ "--system-prompt-snapshot off"
++      assert turn2 =~ "--system-prompt-snapshot off"
++
++      [turn1, turn2] = two_turns_with([], system_prompt: "changed")
++      refute turn1 =~ "--system-prompt-snapshot"
++      refute turn2 =~ "--system-prompt-snapshot"
++    end
++  end
+ end
+diff --git a/test/mix/tasks/claude_contract_test.exs b/test/mix/tasks/claude_contract_test.exs
+index facdaa1..2857613 100644
+--- a/test/mix/tasks/claude_contract_test.exs
++++ b/test/mix/tasks/claude_contract_test.exs
+@@ -29,6 +29,101 @@ defmodule Mix.Tasks.Claude.ContractTest do
+     assert [_finding] = Contract.check(removed, [{[], ["--system-prompt-file", "file"]}])
+   end
+ 
++  @subagent_hidden ~w(--append-subagent-system-prompt --append-subagent-system-prompt-file --advisor)
++
++  @issue_328_flags ~w(--restricted --permission-prompts --system-prompt-snapshot --autocompact
++                      --allow-dangerously-skip-permissions --chrome --no-chrome
++                      --forward-subagent-text --append-subagent-system-prompt
++                      --append-subagent-system-prompt-file --advisor --prompt-suggestions)
++
++  test "the #328 hidden value flags are probed for their own missing operand error" do
++    assert Enum.all?(@subagent_hidden, &(&1 in Contract.hidden_value_flags()))
++    binary = echoing_cli(nil)
++
++    for flag <- @subagent_hidden do
++      assert Contract.check(binary, [{[], [flag, "value", "--", "prompt"]}]) == []
++    end
++  end
++
++  test "a #328 hidden flag the CLI does not recognize fails the contract" do
++    for flag <- @subagent_hidden do
++      binary = echoing_cli(flag)
++      assert [finding] = Contract.check(binary, [{[], [flag, "value"]}])
++      assert finding =~ "emitted #{flag} is not documented"
++    end
++  end
++
++  test "an unlisted, non-hidden flag still fails" do
++    binary = echoing_cli(nil)
++    assert [finding] = Contract.check(binary, [{[], ["--advisor-typo", "x"]}])
++    assert finding =~ "--advisor-typo"
++  end
++
++  test "query specimens exercise every #328 flag, including both chrome spellings" do
++    emitted =
++      Contract.query_specs()
++      |> Enum.flat_map(fn {[], args} -> Enum.take_while(args, &(&1 != "--")) end)
++
++    for flag <- @issue_328_flags do
++      assert flag in emitted, "#{flag} is not exercised by a contract specimen"
++    end
++
++    assert Enum.any?(Contract.query_specs(), fn {[], args} ->
++             subsequence?(["--prompt-suggestions", "false"], args)
++           end)
++  end
++
++  describe "version-tagged flags" do
++    test "the tagged flags start at 2.1.309" do
++      for flag <- ~w(--restricted --permission-prompts --system-prompt-snapshot --autocompact
++                     --append-subagent-system-prompt-file) do
++        assert Contract.checked_from()[flag] == "2.1.309"
++      end
++    end
++
++    test "a tagged flag missing from help is not a finding on an older version" do
++      {binary, _marker} = fake_cli()
++      assert Contract.check(binary, [{[], ["--restricted", "--", "p"]}], "2.1.220") == []
++    end
++
++    test "a tagged flag missing from help is a finding at or after its tag" do
++      {binary, _marker} = fake_cli()
++
++      for version <- ["2.1.309", "2.1.316"] do
++        assert [finding] = Contract.check(binary, [{[], ["--restricted"]}], version)
++        assert finding =~ "emitted --restricted is not documented"
++      end
++    end
++
++    test "an untagged missing flag is still a finding on the older version" do
++      {binary, _marker} = fake_cli()
++
++      assert [finding] =
++               Contract.check(binary, [{[], ["--restricted", "--removed-option"]}], "2.1.220")
++
++      assert finding =~ "emitted --removed-option is not documented"
++    end
++
++    test "a tagged hidden flag is not probed before its tag and is probed after" do
++      flag = "--append-subagent-system-prompt-file"
++      binary = echoing_cli(flag)
++
++      assert Contract.check(binary, [{[], [flag, "f"]}], "2.1.220") == []
++      assert [finding] = Contract.check(binary, [{[], [flag, "f"]}], "2.1.309")
++      assert finding =~ "emitted #{flag} is not documented"
++    end
++
++    test "without a version every flag is checked" do
++      {binary, _marker} = fake_cli()
++      assert [_finding] = Contract.check(binary, [{[], ["--restricted"]}])
++    end
++
++    test "reported_version/1 reads the version from --version output" do
++      assert Contract.reported_version("2.1.220 (Claude Code)\n") == "2.1.220"
++      assert Contract.reported_version("Claude Code") == nil
++    end
++  end
++
+   test "token-from-stdin setup is rejected before starting a process" do
+     {binary, marker} = fake_cli()
+ 
+@@ -63,4 +158,40 @@ defmodule Mix.Tasks.Claude.ContractTest do
+     File.chmod!(binary, 0o755)
+     {binary, marker}
+   end
++
++  # A fake whose `-p <flag>` probe reports a missing operand for that flag,
++  # except for `unknown_flag`, which it reports as unknown.
++  defp echoing_cli(unknown_flag) do
++    dir =
++      Path.join(
++        System.tmp_dir!(),
++        "claude-contract-echo-#{System.pid()}-#{System.unique_integer([:positive])}"
++      )
++
++    File.mkdir!(dir)
++    on_exit(fn -> File.rm_rf!(dir) end)
++    binary = Path.join(dir, "claude")
++
++    File.write!(binary, """
++    #!/bin/sh
++    case "$*" in
++      *--help) printf 'Usage: claude [options] [prompt]\\nOptions:\\n  --model <MODEL>\\n  --help\\n'; exit 0 ;;
++    esac
++    if [ "$2" = "#{unknown_flag}" ]; then
++      printf "error: unknown option '%s'\\n" "$2"
++    else
++      printf "error: option '%s <value>' argument missing\\n" "$2"
++    fi
++    exit 1
++    """)
++
++    File.chmod!(binary, 0o755)
++    binary
++  end
++
++  defp subsequence?(sub, list) do
++    list
++    |> Enum.chunk_every(length(sub), 1, :discard)
++    |> Enum.any?(&(&1 == sub))
++  end
+ end

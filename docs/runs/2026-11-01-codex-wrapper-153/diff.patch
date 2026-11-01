@@ -1,0 +1,341 @@
+diff --git a/README.md b/README.md
+index 454882d..3e98e8b 100644
+--- a/README.md
++++ b/README.md
+@@ -290,6 +290,23 @@ events, missing or invalid messages and parser failures are distinct tagged
+ errors that keep the result and events. `Structured.decode/2` decodes a
+ `%Result{}` from a run that used an explicit schema path.
+ 
++## Final message from plain-text runs
++
++`CodexWrapper.LastMessage.run/3` reads the final agent message independently
++of merged stdout and stderr, keeping the original process result:
++
++```elixir
++{:ok, text, result} =
++  CodexWrapper.Exec.new("Summarize the diff in one paragraph")
++  |> CodexWrapper.LastMessage.run(CodexWrapper.Config.new())
++```
++
++Works with `Exec`, `ExecResume`, `ExecFork` and `Review`. The wrapper creates
++a private temporary file and removes it after execution, including failures
++and raises. An explicit `output_last_message/2` path remains the caller's.
++Missing or empty output on exit zero returns `{:error, {:no_last_message, result}}`;
++a non-zero exit returns `{:error, {:process_failed, text, result}}`.
++
+ ## Session resumption
+ 
+ Resume a previous session:
+diff --git a/docs/last-message-native-0.165.0.md b/docs/last-message-native-0.165.0.md
+new file mode 100644
+index 0000000..d877be9
+--- /dev/null
++++ b/docs/last-message-native-0.165.0.md
+@@ -0,0 +1,15 @@
++# Last-message native probe
++
++Verified by the operator on macOS, 2026-11-01, with codex-cli 0.165.0.
++Run outside any git repository:
++
++```sh
++codex exec --ephemeral --ignore-user-config --skip-git-repo-check \
++  --model codex-wrapper-nonexistent-model -o <dir>/last.txt 'Reply with one word.'
++```
++
++The CLI started a session, warned that model metadata was not found, and
++printed twice that the model is not supported when using Codex with a
++ChatGPT account. It exited 1 without creating the `-o` file. With the
++wrapper's pre-created owned file, the file remains empty and the returned
++`{:process_failed, text, result}` carries `""` as its text.
+diff --git a/lib/codex_wrapper/last_message.ex b/lib/codex_wrapper/last_message.ex
+new file mode 100644
+index 0000000..1bc93d8
+--- /dev/null
++++ b/lib/codex_wrapper/last_message.ex
+@@ -0,0 +1,102 @@
++defmodule CodexWrapper.LastMessage do
++  @moduledoc """
++  Run a command and read its final agent message from `--output-last-message`.
++
++      {:ok, text, result} =
++        CodexWrapper.Exec.new("Summarize the diff in one paragraph")
++        |> CodexWrapper.LastMessage.run(CodexWrapper.Config.new())
++
++  Supports `Exec`, `ExecResume`, `ExecFork` and `Review`. An explicit
++  `output_last_message/2` path is used as supplied and remains the caller's
++  responsibility. Otherwise this module owns a temporary file for the run.
++  Text is returned verbatim, independently of stdout and stderr.
++
++  A zero exit with a missing or empty file returns
++  `{:error, {:no_last_message, result}}`. A non-zero exit returns
++  `{:error, {:process_failed, text, result}}`, with `""` for a missing file.
++  With codex-cli 0.165.0 a failed turn exits non-zero without writing the file,
++  so an owned file is left empty and the text in `{:process_failed, text, result}` is `""`.
++  Other read failures return `{:error, {:last_message_read, reason, result}}`.
++  File creation failures return `{:error, {:last_message_file, reason}}`;
++  runner errors are returned unchanged.
++  """
++
++  alias CodexWrapper.{Config, Exec, ExecFork, ExecResume, Result, Review}
++
++  @type command :: Exec.t() | ExecResume.t() | ExecFork.t() | Review.t()
++  @type error ::
++          {:no_last_message, Result.t()}
++          | {:process_failed, String.t(), Result.t()}
++          | {:last_message_read, File.posix(), Result.t()}
++          | {:last_message_file, File.posix()}
++          | term()
++
++  @doc """
++  Run `command` and return its final agent message and original result.
++
++  Options are passed to the command's `execute/3`, including observation
++  options. The owned file is created with mode `0600` in `System.tmp_dir!/0`
++  and removed after execution on success, failure or raise. Explicit paths
++  are neither created ahead of execution nor removed by this module.
++  """
++  @spec run(command(), Config.t(), keyword()) ::
++          {:ok, String.t(), Result.t()} | {:error, error()}
++  def run(command, %Config{} = config, opts \\ []) when is_list(opts) do
++    module = command_module(command)
++
++    case command.output_last_message do
++      nil -> with_message_file(fn path -> execute(module, command, config, opts, path) end)
++      path -> execute(module, command, config, opts, path)
++    end
++  end
++
++  defp command_module(%Exec{}), do: Exec
++  defp command_module(%ExecResume{}), do: ExecResume
++  defp command_module(%ExecFork{}), do: ExecFork
++  defp command_module(%Review{}), do: Review
++
++  defp execute(module, command, config, opts, path) do
++    command
++    |> module.output_last_message(path)
++    |> module.execute(config, opts)
++    |> case do
++      {:ok, %Result{} = result} -> read_message(path, result)
++      {:error, _reason} = error -> error
++    end
++  end
++
++  defp read_message(path, result) do
++    case File.read(path) do
++      {:ok, text} -> outcome(text, result)
++      {:error, :enoent} -> outcome("", result)
++      {:error, reason} -> {:error, {:last_message_read, reason, result}}
++    end
++  end
++
++  defp outcome(text, %Result{exit_code: code} = result) when code != 0,
++    do: {:error, {:process_failed, text, result}}
++
++  defp outcome("", result), do: {:error, {:no_last_message, result}}
++  defp outcome(text, result), do: {:ok, text, result}
++
++  defp with_message_file(fun) do
++    path =
++      Path.join(
++        System.tmp_dir!(),
++        "codex-wrapper-last-message-#{System.pid()}-#{System.unique_integer([:positive])}.txt"
++      )
++
++    with :ok <- File.write(path, "", [:exclusive]),
++         :ok <- File.chmod(path, 0o600) do
++      try do
++        fun.(path)
++      after
++        File.rm(path)
++      end
++    else
++      {:error, reason} ->
++        File.rm(path)
++        {:error, {:last_message_file, reason}}
++    end
++  end
++end
+diff --git a/mix.exs b/mix.exs
+index a332200..583d89b 100644
+--- a/mix.exs
++++ b/mix.exs
+@@ -61,6 +61,7 @@ defmodule CodexWrapperEx.MixProject do
+         "Config, results, support": [
+           CodexWrapper.Config,
+           CodexWrapper.Result,
++          CodexWrapper.LastMessage,
+           CodexWrapper.SessionObservation,
+           CodexWrapper.ObservedExecution,
+           CodexWrapper.JsonLineEvent,
+diff --git a/test/codex_wrapper/last_message_test.exs b/test/codex_wrapper/last_message_test.exs
+new file mode 100644
+index 0000000..d79869f
+--- /dev/null
++++ b/test/codex_wrapper/last_message_test.exs
+@@ -0,0 +1,141 @@
++defmodule CodexWrapper.LastMessageTest do
++  use ExUnit.Case, async: true
++
++  alias CodexWrapper.{Config, Exec, ExecFork, ExecResume, LastMessage, Result, Review}
++
++  @fake Path.expand("../fixtures/fake_codex_last_message", __DIR__)
++
++  defmodule InspectRunner do
++    def run(mode, args, _opts, _timeout) do
++      index = Enum.find_index(args, &(&1 == "--output-last-message"))
++      path = Enum.at(args, index + 1)
++      send(self(), {:path, path, File.stat!(path)})
++
++      case mode do
++        "raise" ->
++          raise "runner failed"
++
++        "error" ->
++          {:error, :synthetic}
++
++        "read_error" ->
++          {:ok, {"noise", 0}}
++
++        "ok" ->
++          File.write!(path, "private message")
++          {:ok, {"noise", 0}}
++      end
++    end
++
++    def run_observed(mode, args, opts, timeout, {caller, reference}) do
++      unless "--json" in args, do: raise("expected observed execution")
++      send(caller, {reference, {:stdout, ~s({"type":"thread.started","thread_id":"fake"}\n)}})
++      {:ok, {stdout, code}} = run(mode, args, opts, timeout)
++      {:ok, {stdout, code, "separate stderr"}}
++    end
++  end
++
++  defp run_fake(scenario, command \\ Exec.new("summarize")) do
++    calls =
++      Path.join(System.tmp_dir!(), "last-message-calls-#{System.unique_integer([:positive])}")
++
++    on_exit(fn -> File.rm(calls) end)
++
++    config =
++      Config.new(
++        binary: @fake,
++        timeout: 10_000,
++        env: [{"FAKE_CODEX_CALLS", calls}, {"FAKE_CODEX_SCENARIO", scenario}]
++      )
++
++    outcome = LastMessage.run(command, config)
++    path = calls |> File.read!() |> String.trim_trailing()
++    {outcome, path}
++  end
++
++  test "returns exact final text for all four commands and removes owned files" do
++    for command <- [Exec.new("x"), ExecResume.new(), ExecFork.new("source-thread"), Review.new()] do
++      assert {{:ok, "final message\n", %Result{exit_code: 0} = result}, path} =
++               run_fake("success", command)
++
++      assert result.stdout =~ "stdout noise"
++      assert result.stdout =~ "stderr noise"
++      refute File.exists?(path)
++    end
++  end
++
++  test "missing and empty successful output is no_last_message" do
++    for scenario <- ["missing", "empty"] do
++      assert {{:error, {:no_last_message, %Result{exit_code: 0}}}, path} = run_fake(scenario)
++      refute File.exists?(path)
++    end
++  end
++
++  test "nonzero exits retain text and result, including missing and empty files" do
++    for {scenario, text} <- [
++          {"failed", "final message\n"},
++          {"failed_missing", ""},
++          {"failed_empty", ""}
++        ] do
++      assert {{:error, {:process_failed, ^text, %Result{exit_code: 2}}}, path} =
++               run_fake(scenario)
++
++      refute File.exists?(path)
++    end
++  end
++
++  test "explicit paths remain the caller's for every command" do
++    path = Path.join(System.tmp_dir!(), "caller-message-#{System.unique_integer([:positive])}")
++    on_exit(fn -> File.rm(path) end)
++
++    for command <- [Exec.new("x"), ExecResume.new(), ExecFork.new("source-thread"), Review.new()] do
++      command = %{command | output_last_message: path}
++      assert {{:ok, "final message\n", _result}, ^path} = run_fake("success", command)
++      assert File.read!(path) == "final message\n"
++    end
++  end
++
++  test "passes observation options through and preserves the result" do
++    config = Config.new(binary: "ok", runner: InspectRunner)
++    reference = make_ref()
++
++    assert {:ok, "private message", %Result{stdout: "noise", stderr: "separate stderr"}} =
++             LastMessage.run(Exec.new("x"), config, session_observer: {self(), reference})
++
++    assert_received {^reference, %CodexWrapper.SessionObservation{session_id: "fake"}}
++  end
++
++  test "read errors retain the original result and explicit path" do
++    config = Config.new(binary: "read_error", runner: InspectRunner)
++    command = Exec.new("x") |> Exec.output_last_message(__DIR__)
++
++    assert {:error, {:last_message_read, :eisdir, %Result{exit_code: 0}}} =
++             LastMessage.run(command, config)
++
++    assert File.dir?(__DIR__)
++  end
++
++  test "owned file is private and cleaned on success, runner errors and raises" do
++    for mode <- ["ok", "error", "raise"] do
++      config = Config.new(binary: mode, runner: InspectRunner)
++
++      case mode do
++        "ok" ->
++          assert {:ok, "private message", _} = LastMessage.run(Exec.new("x"), config)
++
++        "error" ->
++          assert {:error, :synthetic} = LastMessage.run(Exec.new("x"), config)
++
++        "raise" ->
++          assert_raise RuntimeError, "runner failed", fn ->
++            LastMessage.run(Exec.new("x"), config)
++          end
++      end
++
++      assert_received {:path, path, stat}
++      assert Bitwise.band(stat.mode, 0o777) == 0o600
++      assert Path.dirname(path) == Path.expand(System.tmp_dir!())
++      refute File.exists?(path)
++    end
++  end
++end
+diff --git a/test/fixtures/fake_codex_last_message b/test/fixtures/fake_codex_last_message
+new file mode 100755
+index 0000000..e323ebc
+--- /dev/null
++++ b/test/fixtures/fake_codex_last_message
+@@ -0,0 +1,19 @@
++#!/bin/sh
++previous=''
++for arg in "$@"; do
++  if [ "$previous" = '--output-last-message' ] || [ "$previous" = '-o' ]; then
++    path="$arg"
++  fi
++  previous="$arg"
++done
++printf '%s\n' "$path" > "$FAKE_CODEX_CALLS"
++case "$FAKE_CODEX_SCENARIO" in
++  missing|failed_missing) rm -f "$path" ;;
++  empty|failed_empty) : > "$path" ;;
++  *) printf 'final message\n' > "$path" ;;
++esac
++printf 'stdout noise\n'
++printf 'stderr noise\n' >&2
++case "$FAKE_CODEX_SCENARIO" in
++  failed*) exit 2 ;;
++esac

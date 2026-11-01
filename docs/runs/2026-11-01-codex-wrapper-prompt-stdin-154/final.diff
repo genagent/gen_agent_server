@@ -1,0 +1,2525 @@
+diff --git a/README.md b/README.md
+index 3e98e8b..3f2306b 100644
+--- a/README.md
++++ b/README.md
+@@ -74,6 +74,48 @@ CodexWrapper.stream("Implement the feature described in issue #42",
+ |> Stream.run()
+ ```
+ 
++## Prompt transport
++
++`Exec`, `ExecResume`, `Review` and `ExecFork` send prompts on stdin by default.
++This also applies to convenience calls and initial or resumed session turns,
++for both execute and stream. The argument list contains `-` instead of the
++prompt, so prompt size does not consume the operating system's argv budget
++and the prompt is absent from process arguments.
++
++Each invocation creates a 0600 file in a private 0700 directory. The launcher
++opens the file as stdin and unlinks it before codex runs. The wrapper also
++cleans up files after startup failures, timeouts and stream halts. Streams
++create their file when enumerated.
++
++Select the previous argv form when needed:
++
++```elixir
++CodexWrapper.exec("Explain this error", prompt_input: :argv)
++
++Exec.new("Explain this error")
++|> Exec.prompt_input(:argv)
++|> Exec.execute(config)
++```
++
++All four builders support `prompt_input/2`. Session defaults and per-turn
++options accept `:prompt_input` too. A prompt of exactly `-` is always sent as
++literal text on stdin, even in argv mode. An omitted optional prompt remains
++omitted.
++
++The built-in runners reject oversized argument lists or environment strings
++before starting codex, returning `{:error, {:argument_list_too_long, details}}`.
++Streams emit `%CodexWrapper.StreamError{}` with that reason. The size check
++includes inherited environment, launcher overhead and Linux per-string
++limits. It reserves 4 KiB below the reported aggregate limit, and uses a
++conservative 32 KiB limit if `getconf` is unavailable. Argv mode still exposes
++prompt text in the process table and is subject to these limits.
++
++Custom runners receive prompt bytes as `opts[:stdin]`; they must deliver all
++bytes and then EOF, or callers must select `prompt_input: :argv`. The built-in
++runners preserve their termination behavior: Port sends INT, TERM and KILL;
++Forcola one-shot execution does too, while Forcola 0.7 streaming retains its
++TERM/KILL-only schedule.
++
+ ## Code review
+ 
+ ```elixir
+@@ -853,8 +895,8 @@ Every `codex` subprocess -- the synchronous commands
+ `Review.execute/2`) and the NDJSON streaming paths (`Exec.stream/2`,
+ `ExecResume.stream/2`, `Review.stream/2`, `Session.stream/3`) -- routes
+ through a runner module. The default, `CodexWrapper.Runner.Port`, runs `codex` under a
+-`/bin/sh` wrapper with stdin closed and bounds it with a BEAM `Task`
+-timeout.
++`/bin/sh` wrapper, supplies the prompt on stdin, and bounds synchronous execution
++with a BEAM `Task` timeout. Commands without prompt input receive `/dev/null`.
+ 
+ When the port closes -- a timeout, a stream idle timeout or early halt, the
+ owning process dying, or the BEAM dying -- the wrapper's watchdog signals
+@@ -954,6 +996,7 @@ streams.
+ 
+ | Option | Type | Description |
+ |---|---|---|
++| `:prompt_input` | `:stdin` or `:argv` | Prompt transport (default `:stdin`) |
+ | `:model` | `String.t()` | Model name (e.g., `"o3"`, `"o4-mini"`) |
+ | `:profile` | `String.t()` | Named config profile (`--profile`) |
+ | `:sandbox` | atom | `:read_only`, `:workspace_write`, or `:danger_full_access` |
+@@ -1008,7 +1051,7 @@ this table.
+ | `CodexWrapper.Telemetry` | `:telemetry` span wrappers for exec paths |
+ | `CodexWrapper.Command` | Behaviour for CLI commands |
+ | `CodexWrapper.Runner` | Behaviour selecting how subprocesses execute and stream |
+-| `CodexWrapper.Runner.Port` | Default runner (`/bin/sh` Port with closed stdin and INT/TERM/KILL cleanup of `codex`) |
++| `CodexWrapper.Runner.Port` | Default runner (`/bin/sh` Port with prompt stdin and INT/TERM/KILL cleanup of `codex`) |
+ | `CodexWrapper.Runner.Forcola` | Optional leak-free runner via `forcola` |
+ | `CodexWrapper.Commands.Auth` | Authentication (login/logout/status) |
+ | `CodexWrapper.Commands.Features` | Feature flag management |
+diff --git a/lib/codex_wrapper.ex b/lib/codex_wrapper.ex
+index 6e5d472..b078f70 100644
+--- a/lib/codex_wrapper.ex
++++ b/lib/codex_wrapper.ex
+@@ -114,6 +114,7 @@ defmodule CodexWrapper do
+       observation. Requires an observed runner; see `CodexWrapper.ObservedExecution`.
+ 
+   Exec options (passed to `Exec` builder):
++    * `:prompt_input` - `:stdin` (default) or `:argv`; see `CodexWrapper.Exec.prompt_input/2`
+     * `:model` - Model name
+     * `:profile` - Named config profile (`--profile`)
+     * `:sandbox` - `:read_only`, `:workspace_write`, or `:danger_full_access`
+@@ -226,6 +227,7 @@ defmodule CodexWrapper do
+ 
+   Review options (passed to `Review` builder):
+     * `:prompt` - Additional review context
++    * `:prompt_input` - `:stdin` (default) or `:argv`; a literal `-` always uses stdin
+     * `:uncommitted` - Review uncommitted changes (boolean)
+     * `:base` - Compare against base branch
+     * `:commit` - Review a specific commit
+diff --git a/lib/codex_wrapper/argv.ex b/lib/codex_wrapper/argv.ex
+new file mode 100644
+index 0000000..43395d7
+--- /dev/null
++++ b/lib/codex_wrapper/argv.ex
+@@ -0,0 +1,98 @@
++defmodule CodexWrapper.Argv do
++  @moduledoc false
++
++  # Leave room for interpreter paths, alignment and shell-added environment
++  # entries. This deliberately rejects inputs very close to the OS ceiling.
++  @reserve_bytes 4_096
++  @pointer_bytes 8
++
++  @type size_error :: {:argument_list_too_long, map()}
++
++  @spec validate(String.t(), [String.t()], keyword()) ::
++          :ok | {:error, size_error() | {:invalid_argument, non_neg_integer()}}
++  def validate(binary, args, opts) do
++    validate(binary, args, opts, limits())
++  end
++
++  @doc false
++  def validate(binary, args, opts, limits) do
++    argv = [binary | args]
++    env = environment(opts)
++
++    with :ok <- valid_arguments(argv),
++         :ok <- validate_strings(argv, :argument, limits.string),
++         :ok <- validate_strings(env, :environment, limits.string) do
++      bytes =
++        string_bytes(argv) + string_bytes(env) +
++          @pointer_bytes * (length(argv) + length(env) + 2) +
++          byte_size(binary) + 1 + @reserve_bytes
++
++      if bytes > limits.total,
++        do: too_long(:total, bytes, limits.total),
++        else: :ok
++    end
++  end
++
++  # Linux's aggregate limit depends on RLIMIT_STACK, so query it at execution
++  # time. Linux also limits every individual argument/environment string to
++  # 32 pages, including its terminating NUL. macOS has no separate string cap.
++  @doc false
++  def limits do
++    string =
++      case :os.type() do
++        {:unix, :linux} -> 32 * getconf("PAGESIZE", 4_096)
++        _ -> nil
++      end
++
++    %{total: getconf("ARG_MAX", 32_768), string: string}
++  end
++
++  defp environment(opts) do
++    base = if opts[:env_mode] == :replace, do: %{}, else: System.get_env()
++
++    opts
++    |> Keyword.get(:env, [])
++    |> CodexWrapper.Config.validate_env!()
++    |> Enum.reduce(base, fn
++      {key, false}, env -> Map.delete(env, key)
++      {key, value}, env -> Map.put(env, key, value)
++    end)
++    |> Enum.map(fn {key, value} -> key <> "=" <> value end)
++  end
++
++  defp valid_arguments(argv) do
++    case Enum.find_index(argv, &String.contains?(&1, <<0>>)) do
++      nil -> :ok
++      index -> {:error, {:invalid_argument, index}}
++    end
++  end
++
++  defp validate_strings(_values, _kind, nil), do: :ok
++
++  defp validate_strings(values, kind, limit) do
++    case Enum.find(values, &(byte_size(&1) + 1 > limit)) do
++      nil -> :ok
++      value -> too_long(kind, byte_size(value) + 1, limit)
++    end
++  end
++
++  defp string_bytes(values), do: Enum.reduce(values, 0, &(byte_size(&1) + 1 + &2))
++
++  defp too_long(kind, bytes, limit),
++    do: {:error, {:argument_list_too_long, %{kind: kind, bytes: bytes, limit: limit}}}
++
++  defp getconf(name, fallback) do
++    case System.cmd("/usr/bin/getconf", [name], stderr_to_stdout: true) do
++      {output, 0} ->
++        case Integer.parse(String.trim(output)) do
++          {value, ""} when value > 0 -> value
++          _ -> fallback
++        end
++
++      _ ->
++        fallback
++    end
++  rescue
++    ErlangError -> fallback
++  end
++end
+diff --git a/lib/codex_wrapper/command.ex b/lib/codex_wrapper/command.ex
+index f4e7244..57751b3 100644
+--- a/lib/codex_wrapper/command.ex
++++ b/lib/codex_wrapper/command.ex
+@@ -4,8 +4,8 @@ defmodule CodexWrapper.Command do
+ 
+   Every command knows how to build its argument list and how to
+   parse its output. Synchronous execution routes through the configured
+-  `CodexWrapper.Runner`; the default runner closes stdin (Codex CLI hangs
+-  if stdin is inherited from the parent).
++  `CodexWrapper.Runner`; prompts use stdin by default and commands without
++  input receive EOF instead of inheriting the parent's stdin.
+   """
+ 
+   @type args :: [String.t()]
+@@ -26,7 +26,7 @@ defmodule CodexWrapper.Command do
+   def run(mod, command, config) do
+     all_args = CodexWrapper.Config.base_args(config) ++ mod.args(command)
+ 
+-    case CodexWrapper.Runner.run(config, all_args) do
++    case CodexWrapper.Runner.run(config, all_args, stdin_opts(command, [])) do
+       {:ok, {stdout, code}} ->
+         mod.parse_output(stdout, code)
+ 
+@@ -35,13 +35,31 @@ defmodule CodexWrapper.Command do
+     end
+   end
+ 
++  @doc false
++  @spec prompt_arg(map()) :: String.t() | nil
++  def prompt_arg(%{prompt: nil}), do: nil
++  def prompt_arg(%{prompt_input: :stdin}), do: "-"
++  def prompt_arg(%{prompt_input: :argv, prompt: prompt}), do: prompt
++
++  @doc false
++  @spec stdin_opts(map(), keyword()) :: keyword()
++  def stdin_opts(%{prompt: prompt, prompt_input: :stdin}, opts) when is_binary(prompt),
++    do: Keyword.put(opts, :stdin, prompt)
++
++  # A literal dash must not ask the CLI to read an empty inherited stdin.
++  def stdin_opts(%{prompt: "-", prompt_input: :argv}, opts),
++    do: Keyword.put(opts, :stdin, "-")
++
++  def stdin_opts(_command, opts), do: opts
++
+   # Seconds the watchdog waits after SIGINT before SIGTERM, and after SIGTERM
+   # before SIGKILL. Fixed: the cleanup schedule is not a configuration surface.
+   @int_grace_s 2
+   @term_grace_s 1
+ 
+   # Build the `:args` list for a `Port.open({:spawn_executable, "/bin/sh"}, ...)`
+-  # call that runs `binary` with `args`, redirects its stdin from `/dev/null`,
++  # call that runs `binary` with `args`, redirects stdin from a private prompt
++  # file or `/dev/null`,
+   # and cleans it up when the port goes away. Shared by the execute path
+   # (`run/3`) and the streaming paths (`Exec.stream/2`, `ExecResume.stream/2`)
+   # so the stdin-closing and cleanup mechanism lives in one place.
+@@ -93,24 +111,45 @@ defmodule CodexWrapper.Command do
+   @doc false
+   @spec shell_cmd_args(String.t(), [String.t()], keyword()) :: [String.t()]
+   def shell_cmd_args(binary, args, opts \\ []) do
++    path = Keyword.get(opts, :stdin_file)
++    input_redirect = if path, do: "<&4", else: "</dev/null"
++
+     target_redirects =
+-      if Keyword.get(opts, :capture_stderr, false),
+-        do: "</dev/null 3<&- 2>&1",
+-        else: "</dev/null 3<&-"
++      input_redirect <>
++        " 3<&- 4<&-" <>
++        if(Keyword.get(opts, :capture_stderr, false), do: " 2>&1", else: "")
+ 
+-    # sh -c consumes the first positional argument as $0. Keep a deliberate
+-    # label there so "$@" includes the executable and every argument verbatim.
+-    ["-c", supervisor_script(target_redirects), "codex-wrapper", binary | args]
++    # sh -c consumes the first positional argument as $0. File paths are
++    # separate arguments, never interpolated into executable shell code.
++    prefix = if path, do: [path, Path.dirname(path)], else: []
++
++    ["-c", supervisor_script(target_redirects, not is_nil(path)), "codex-wrapper"] ++
++      prefix ++ [binary | args]
++  end
++
++  defp stdin_setup(false), do: ""
++
++  defp stdin_setup(true) do
++    """
++    stdin_file=$1
++    stdin_directory=$2
++    shift 2
++    exec 4<"$stdin_file" || exit 125
++    /bin/rm -f -- "$stdin_file" || exit 125
++    /bin/rmdir -- "$stdin_directory" || exit 125
++    """
+   end
+ 
+-  defp supervisor_script(target_redirects) do
++  defp supervisor_script(target_redirects, stdin?) do
+     """
+     watcher_ready=0
+     trap 'watcher_ready=1' USR1
+     supervisor=$$
+     exec 3<&0
++    #{stdin_setup(stdin?)}
+     "$@" #{target_redirects} &
+     t=$!
++    exec 4<&-
+     (
+       kill -s USR1 "$supervisor" || exit 0
+       while read -r _line; do :; done
+diff --git a/lib/codex_wrapper/evidenced_execution.ex b/lib/codex_wrapper/evidenced_execution.ex
+index 937a302..7a01a8c 100644
+--- a/lib/codex_wrapper/evidenced_execution.ex
++++ b/lib/codex_wrapper/evidenced_execution.ex
+@@ -1,6 +1,6 @@
+ defmodule CodexWrapper.EvidencedExecution do
+   @moduledoc false
+-  alias CodexWrapper.{Config, ExecutionObservation, Result, Runner, SessionObservation}
++  alias CodexWrapper.{Command, Config, ExecutionObservation, Result, Runner, SessionObservation}
+ 
+   @default_output 1_048_576
+   @default_timeout 300_000
+@@ -9,8 +9,8 @@ defmodule CodexWrapper.EvidencedExecution do
+   def run(mod, command, config, opts) do
+     with {:ok, execution} <- observer(opts[:execution_observer], :execution) do
+       case prepare(mod, command, config, opts, execution) do
+-        {:ok, runner, args, session} ->
+-          collect(runner, config, args, session, execution)
++        {:ok, runner, invocation, session} ->
++          collect(runner, config, invocation, session, execution)
+ 
+         {:error, _} = error ->
+           notify(execution, %ExecutionObservation{outcome: error, termination: :pre_spawn})
+@@ -43,7 +43,8 @@ defmodule CodexWrapper.EvidencedExecution do
+         do: raise(ArgumentError, "evidenced execution requires a finite positive timeout")
+ 
+       args = Config.base_args(config) ++ mod.args(%{command | json: true})
+-      {:ok, runner, args, session}
++      transport_opts = Command.stdin_opts(command, Config.execution_opts(config))
++      {:ok, runner, {args, transport_opts}, session}
+     end
+   catch
+     kind, reason ->
+@@ -81,10 +82,9 @@ defmodule CodexWrapper.EvidencedExecution do
+       else: {:ok, nil}
+   end
+ 
+-  defp collect(runner, config, args, session, execution) do
++  defp collect(runner, config, {args, opts}, session, execution) do
+     owner = self()
+     ref = make_ref()
+-    opts = Config.execution_opts(config)
+     max_bytes = Keyword.get(opts, :max_output_bytes, @default_output)
+     wall = Runner.timeout(config) || Keyword.get(opts, :timeout_ms, @default_timeout)
+ 
+diff --git a/lib/codex_wrapper/exec.ex b/lib/codex_wrapper/exec.ex
+index 6755188..e93c891 100644
+--- a/lib/codex_wrapper/exec.ex
++++ b/lib/codex_wrapper/exec.ex
+@@ -29,6 +29,7 @@ defmodule CodexWrapper.Exec do
+ 
+   @type t :: %__MODULE__{
+           prompt: String.t(),
++          prompt_input: :stdin | :argv,
+           model: String.t() | nil,
+           profile: String.t() | nil,
+           sandbox: sandbox_mode() | nil,
+@@ -68,6 +69,7 @@ defmodule CodexWrapper.Exec do
+     :search,
+     :color,
+     :local_provider,
++    prompt_input: :stdin,
+     full_auto: false,
+     dangerously_bypass_approvals_and_sandbox: false,
+     dangerously_bypass_hook_trust: false,
+@@ -97,6 +99,19 @@ defmodule CodexWrapper.Exec do
+ 
+   # --- Builder functions ---
+ 
++  @doc """
++  Select how the prompt reaches the CLI: `:stdin` (default) or `:argv`.
++
++  Stdin mode passes `-` as the prompt positional and sends the prompt bytes
++  through a private temporary file that is unlinked before codex runs.
++  Argv mode retains the positional prompt and exposes it in the process table.
++  A prompt of exactly `-` is always sent literally through stdin, including
++  in argv mode.
++  """
++  @spec prompt_input(t(), :stdin | :argv) :: t()
++  def prompt_input(%__MODULE__{} = command, mode) when mode in [:stdin, :argv],
++    do: %{command | prompt_input: mode}
++
+   @doc "Set the model."
+   @spec model(t(), String.t()) :: t()
+   def model(%__MODULE__{} = e, model), do: %{e | model: model}
+@@ -352,7 +367,12 @@ defmodule CodexWrapper.Exec do
+         args = Config.base_args(config) ++ args(exec)
+ 
+         config
+-        |> Runner.stream_lines(config.binary, args, Config.stream_opts(config), config.timeout)
++        |> Runner.stream_lines(
++          config.binary,
++          args,
++          Command.stdin_opts(exec, Config.stream_opts(config)),
++          config.timeout
++        )
+         |> JsonLineEvent.parse_stream()
+       end
+     )
+@@ -388,7 +408,7 @@ defmodule CodexWrapper.Exec do
+     |> add_opt("--color", format_color(e.color))
+     |> add_bool("--json", e.json)
+     |> add_opt("--output-last-message", e.output_last_message)
+-    |> add_positionals([e.prompt])
++    |> add_positionals([Command.prompt_arg(e)])
+   end
+ 
+   @impl Command
+diff --git a/lib/codex_wrapper/exec_fork.ex b/lib/codex_wrapper/exec_fork.ex
+index 02c3dd2..f216a3a 100644
+--- a/lib/codex_wrapper/exec_fork.ex
++++ b/lib/codex_wrapper/exec_fork.ex
+@@ -61,6 +61,7 @@ defmodule CodexWrapper.ExecFork do
+   @type t :: %__MODULE__{
+           session_id: String.t(),
+           prompt: String.t() | nil,
++          prompt_input: :stdin | :argv,
+           model: String.t() | nil,
+           sandbox: sandbox_mode() | nil,
+           full_auto: boolean(),
+@@ -108,6 +109,7 @@ defmodule CodexWrapper.ExecFork do
+     :output_schema,
+     :output_last_message,
+     :sandbox,
++    prompt_input: :stdin,
+     full_auto: false,
+     dangerously_bypass_approvals_and_sandbox: false,
+     dangerously_bypass_hook_trust: false,
+@@ -137,13 +139,26 @@ defmodule CodexWrapper.ExecFork do
+ 
+   # --- Builder functions ---
+ 
++  @doc """
++  Select how the prompt reaches the CLI: `:stdin` (default) or `:argv`.
++
++  Stdin mode passes `-` as the prompt positional and sends the prompt bytes
++  through a private temporary file that is unlinked before codex runs.
++  Argv mode retains the positional prompt and exposes it in the process table.
++  A prompt of exactly `-` is always sent literally through stdin, including
++  in argv mode.
++  """
++  @spec prompt_input(t(), :stdin | :argv) :: t()
++  def prompt_input(%__MODULE__{} = command, mode) when mode in [:stdin, :argv],
++    do: %{command | prompt_input: mode}
++
+   @doc """
+   Set the prompt to send in the new session after forking.
+ 
+-  The prompt is passed after a `--` option terminator, so a prompt that
+-  begins with `-` or `--` reaches the CLI as the prompt rather than as a
+-  flag. A prompt that is exactly `-` still tells the CLI to read the
+-  prompt from stdin.
++  The prompt is delivered on stdin by default, with `-` after the `--`
++  option terminator. `prompt_input/2` selects argv compatibility mode.
++  A prompt of exactly `-` is sent as literal text through stdin in either
++  mode; it never reads input from the caller's terminal.
+   """
+   @spec prompt(t(), String.t()) :: t()
+   def prompt(%__MODULE__{} = e, prompt), do: %{e | prompt: prompt}
+@@ -450,7 +465,12 @@ defmodule CodexWrapper.ExecFork do
+         args = Config.base_args(config) ++ args(exec)
+ 
+         config
+-        |> Runner.stream_lines(config.binary, args, Config.stream_opts(config), config.timeout)
++        |> Runner.stream_lines(
++          config.binary,
++          args,
++          Command.stdin_opts(exec, Config.stream_opts(config)),
++          config.timeout
++        )
+         |> raise_if_unsupported(config)
+         |> JsonLineEvent.parse_stream()
+       end
+@@ -518,7 +538,7 @@ defmodule CodexWrapper.ExecFork do
+     |> add_opt("--output-schema", e.output_schema)
+     |> add_bool("--json", e.json)
+     |> add_opt("--output-last-message", e.output_last_message)
+-    |> add_positionals([e.session_id, e.prompt])
++    |> add_positionals([e.session_id, Command.prompt_arg(e)])
+   end
+ 
+   @impl Command
+diff --git a/lib/codex_wrapper/exec_resume.ex b/lib/codex_wrapper/exec_resume.ex
+index 7b2d1ee..eae71e2 100644
+--- a/lib/codex_wrapper/exec_resume.ex
++++ b/lib/codex_wrapper/exec_resume.ex
+@@ -33,6 +33,7 @@ defmodule CodexWrapper.ExecResume do
+   @type t :: %__MODULE__{
+           session_id: String.t() | nil,
+           prompt: String.t() | nil,
++          prompt_input: :stdin | :argv,
+           last: boolean(),
+           all: boolean(),
+           model: String.t() | nil,
+@@ -65,6 +66,7 @@ defmodule CodexWrapper.ExecResume do
+     :approval_policy,
+     last: false,
+     all: false,
++    prompt_input: :stdin,
+     full_auto: false,
+     dangerously_bypass_approvals_and_sandbox: false,
+     dangerously_bypass_hook_trust: false,
+@@ -90,6 +92,19 @@ defmodule CodexWrapper.ExecResume do
+ 
+   # --- Builder functions ---
+ 
++  @doc """
++  Select how the prompt reaches the CLI: `:stdin` (default) or `:argv`.
++
++  Stdin mode passes `-` as the prompt positional and sends the prompt bytes
++  through a private temporary file that is unlinked before codex runs.
++  Argv mode retains the positional prompt and exposes it in the process table.
++  A prompt of exactly `-` is always sent literally through stdin, including
++  in argv mode.
++  """
++  @spec prompt_input(t(), :stdin | :argv) :: t()
++  def prompt_input(%__MODULE__{} = command, mode) when mode in [:stdin, :argv],
++    do: %{command | prompt_input: mode}
++
+   @doc "Set the session ID to resume."
+   @spec session_id(t(), String.t()) :: t()
+   def session_id(%__MODULE__{} = e, id), do: %{e | session_id: id}
+@@ -305,7 +320,12 @@ defmodule CodexWrapper.ExecResume do
+         args = Config.base_args(config) ++ args(exec)
+ 
+         config
+-        |> Runner.stream_lines(config.binary, args, Config.stream_opts(config), config.timeout)
++        |> Runner.stream_lines(
++          config.binary,
++          args,
++          Command.stdin_opts(exec, Config.stream_opts(config)),
++          config.timeout
++        )
+         |> JsonLineEvent.parse_stream()
+       end
+     )
+@@ -336,7 +356,7 @@ defmodule CodexWrapper.ExecResume do
+     |> add_bool("--json", e.json)
+     |> add_opt("--output-schema", e.output_schema)
+     |> add_opt("--output-last-message", e.output_last_message)
+-    |> add_positionals([e.session_id, e.prompt])
++    |> add_positionals([e.session_id, Command.prompt_arg(e)])
+   end
+ 
+   @impl Command
+diff --git a/lib/codex_wrapper/observed_execution.ex b/lib/codex_wrapper/observed_execution.ex
+index 570c0e4..f03196e 100644
+--- a/lib/codex_wrapper/observed_execution.ex
++++ b/lib/codex_wrapper/observed_execution.ex
+@@ -37,7 +37,7 @@ defmodule CodexWrapper.ObservedExecution do
+   `{:error, {:observation_unsupported, runner}}`.
+   """
+ 
+-  alias CodexWrapper.{Config, Result, Runner, SessionObservation}
++  alias CodexWrapper.{Command, Config, Result, Runner, SessionObservation}
+ 
+   @doc false
+   @spec run(module(), struct(), Config.t(), keyword()) :: {:ok, Result.t()} | {:error, term()}
+@@ -54,7 +54,8 @@ defmodule CodexWrapper.ObservedExecution do
+          {:ok, runner} <- observed_runner(config),
+          :ok <- Runner.validate_options(runner, Config.runner_options(config)) do
+       args = Config.base_args(config) ++ mod.args(%{command | json: true})
+-      collect(runner, config, args, observer)
++      transport_opts = Command.stdin_opts(command, Config.execution_opts(config))
++      collect(runner, config, {args, transport_opts}, observer)
+     end
+   end
+ 
+@@ -74,10 +75,10 @@ defmodule CodexWrapper.ObservedExecution do
+     end
+   end
+ 
+-  defp collect(runner, config, args, observer) do
++  defp collect(runner, config, invocation, observer) do
+     caller = self()
+     reference = make_ref()
+-    task = Task.async(fn -> invoke(runner, config, args, {caller, reference}) end)
++    task = Task.async(fn -> invoke(runner, config, invocation, {caller, reference}) end)
+     state = %{observer: observer, buffer: "", dropping?: false}
+ 
+     try do
+@@ -92,12 +93,12 @@ defmodule CodexWrapper.ObservedExecution do
+   # The owned Task contains transport exceptions/throws until the execution
+   # caller can reproduce them after cleanup. It must never crash its link
+   # incidentally before the caller has drained prior observation messages.
+-  defp invoke(runner, config, args, target) do
++  defp invoke(runner, config, {args, opts}, target) do
+     {:returned,
+      runner.run_observed(
+        config.binary,
+        args,
+-       Config.execution_opts(config),
++       opts,
+        Runner.timeout(config),
+        target
+      )}
+diff --git a/lib/codex_wrapper/options.ex b/lib/codex_wrapper/options.ex
+index 1945c46..a1fcf8a 100644
+--- a/lib/codex_wrapper/options.ex
++++ b/lib/codex_wrapper/options.ex
+@@ -42,6 +42,9 @@ defmodule CodexWrapper.Options do
+ 
+   # --- Exec ---
+ 
++  defp exec_opt({:prompt_input, v}, command),
++    do: Exec.prompt_input(command, member!(:prompt_input, v, [:stdin, :argv]))
++
+   defp exec_opt({:model, v}, e), do: Exec.model(e, string!(:model, v))
+   defp exec_opt({:profile, v}, e), do: Exec.profile(e, string!(:profile, v))
+   defp exec_opt({:sandbox, v}, e), do: Exec.sandbox(e, member!(:sandbox, v, @sandbox_modes))
+@@ -100,6 +103,9 @@ defmodule CodexWrapper.Options do
+ 
+   # --- ExecResume ---
+ 
++  defp exec_resume_opt({:prompt_input, v}, command),
++    do: ExecResume.prompt_input(command, member!(:prompt_input, v, [:stdin, :argv]))
++
+   defp exec_resume_opt({:model, v}, e), do: ExecResume.model(e, string!(:model, v))
+ 
+   defp exec_resume_opt({:sandbox, v}, e),
+@@ -158,6 +164,9 @@ defmodule CodexWrapper.Options do
+ 
+   # --- Review ---
+ 
++  defp review_opt({:prompt_input, v}, command),
++    do: Review.prompt_input(command, member!(:prompt_input, v, [:stdin, :argv]))
++
+   defp review_opt({:prompt, v}, r), do: Review.prompt(r, string!(:prompt, v))
+   defp review_opt({:uncommitted, v}, r), do: flag(r, :uncommitted, v, &Review.uncommitted/1)
+   defp review_opt({:base, v}, r), do: Review.base(r, string!(:base, v))
+diff --git a/lib/codex_wrapper/review.ex b/lib/codex_wrapper/review.ex
+index 9658442..2621003 100644
+--- a/lib/codex_wrapper/review.ex
++++ b/lib/codex_wrapper/review.ex
+@@ -40,6 +40,7 @@ defmodule CodexWrapper.Review do
+ 
+   @type t :: %__MODULE__{
+           prompt: String.t() | nil,
++          prompt_input: :stdin | :argv,
+           uncommitted: boolean(),
+           base: String.t() | nil,
+           commit: String.t() | nil,
+@@ -72,6 +73,7 @@ defmodule CodexWrapper.Review do
+     :output_last_message,
+     :sandbox,
+     uncommitted: false,
++    prompt_input: :stdin,
+     full_auto: false,
+     dangerously_bypass_approvals_and_sandbox: false,
+     dangerously_bypass_hook_trust: false,
+@@ -96,6 +98,19 @@ defmodule CodexWrapper.Review do
+ 
+   # --- Builder functions ---
+ 
++  @doc """
++  Select how the prompt reaches the CLI: `:stdin` (default) or `:argv`.
++
++  Stdin mode passes `-` as the prompt positional and sends the prompt bytes
++  through a private temporary file that is unlinked before codex runs.
++  Argv mode retains the positional prompt and exposes it in the process table.
++  A prompt of exactly `-` is always sent literally through stdin, including
++  in argv mode.
++  """
++  @spec prompt_input(t(), :stdin | :argv) :: t()
++  def prompt_input(%__MODULE__{} = command, mode) when mode in [:stdin, :argv],
++    do: %{command | prompt_input: mode}
++
+   @doc "Set an optional prompt for additional review context."
+   @spec prompt(t(), String.t()) :: t()
+   def prompt(%__MODULE__{} = r, prompt), do: %{r | prompt: prompt}
+@@ -279,7 +294,12 @@ defmodule CodexWrapper.Review do
+         args = Config.base_args(config) ++ args(review)
+ 
+         config
+-        |> Runner.stream_lines(config.binary, args, Config.stream_opts(config), config.timeout)
++        |> Runner.stream_lines(
++          config.binary,
++          args,
++          Command.stdin_opts(review, Config.stream_opts(config)),
++          config.timeout
++        )
+         |> JsonLineEvent.parse_stream()
+       end
+     )
+@@ -311,7 +331,7 @@ defmodule CodexWrapper.Review do
+     |> add_opt("--output-schema", r.output_schema)
+     |> add_bool("--json", r.json)
+     |> add_opt("--output-last-message", r.output_last_message)
+-    |> add_positionals([r.prompt])
++    |> add_positionals([Command.prompt_arg(r)])
+   end
+ 
+   @impl Command
+diff --git a/lib/codex_wrapper/runner.ex b/lib/codex_wrapper/runner.ex
+index fce5996..c625e56 100644
+--- a/lib/codex_wrapper/runner.ex
++++ b/lib/codex_wrapper/runner.ex
+@@ -6,8 +6,8 @@ defmodule CodexWrapper.Runner do
+ 
+   `Command.run/3` routes every synchronous command (`Exec`, `ExecResume`,
+   `Review`, `CodexWrapper.exec/2`) through the configured runner. The
+-  default is `CodexWrapper.Runner.Port`, the `/bin/sh`-with-closed-stdin
+-  `Port` the library has always used.
++  default is `CodexWrapper.Runner.Port`, a supervised `/bin/sh` Port.
++  Prompt bytes are delivered on stdin; commands without input receive EOF.
+ 
+   When its port closes (a timeout, an early stream halt, the owning
+   process dying, or the BEAM dying) the default runner signals the `codex`
+@@ -50,6 +50,13 @@ defmodule CodexWrapper.Runner do
+   `{:error, {:signal, signal}}` when `Runner.Forcola` reports death by
+   signal. On `Runner.Port` a missing executable is exit status 127 from
+   the shell. A zero exit ends the stream with no error item.
++
++  Built-in runners reject oversized argument lists before spawning with
++  `{:error, {:argument_list_too_long, details}}`. The check includes the
++  effective environment, launcher overhead and Linux per-string limits.
++  It reserves 4 KiB below `getconf ARG_MAX`, with a conservative 32 KiB
++  fallback when the platform limit cannot be read. Error details contain
++  sizes, never argument contents.
+   """
+ 
+   @typedoc "Runner error reasons. `:timeout` is common to every runner."
+@@ -62,6 +69,9 @@ defmodule CodexWrapper.Runner do
+           | {:signal, term()}
+           | {:spawn, term()}
+           | {:io, term()}
++          | {:argument_list_too_long, map()}
++          | {:invalid_argument, non_neg_integer()}
++          | {:stdin_file, term()}
+ 
+   @typedoc """
+   Execution options, as produced by `CodexWrapper.Config.cmd_opts/1`:
+@@ -69,6 +79,10 @@ defmodule CodexWrapper.Runner do
+     * `:cd` -- working directory (string)
+     * `:env` -- list of `{name, value}` string tuples
+     * `:stderr_to_stdout` -- merge stderr into stdout
++    * `:stdin` -- complete prompt bytes, delivered before EOF. This key is
++      absent when the command has no input. Custom runners must support it
++      on every implemented execution callback, or their callers must select
++      `prompt_input: :argv` on prompt commands.
+   """
+   @type opts :: keyword()
+ 
+@@ -209,14 +223,14 @@ defmodule CodexWrapper.Runner do
+   end
+ 
+   @doc false
+-  def run(config, args) do
++  def run(config, args, opts \\ []) do
+     runner = impl(config)
+ 
+     with :ok <- validate_options(runner, CodexWrapper.Config.runner_options(config)) do
+       case runner.run(
+              config.binary,
+              args,
+-             CodexWrapper.Config.execution_opts(config),
++             Keyword.merge(CodexWrapper.Config.execution_opts(config), opts),
+              timeout(config)
+            ) do
+         {:error, :timeout} ->
+diff --git a/lib/codex_wrapper/runner/forcola.ex b/lib/codex_wrapper/runner/forcola.ex
+index 3b15864..ce2b449 100644
+--- a/lib/codex_wrapper/runner/forcola.ex
++++ b/lib/codex_wrapper/runner/forcola.ex
+@@ -31,13 +31,10 @@ if Code.ensure_loaded?(Forcola) do
+     codex's process group or ignore these signals; on Linux, forcola's
+     cgroup option is the backstop.
+ 
+-    forcola closes the child's stdin immediately after spawn (forcola
+-    0.3.4, forcola#67), so `codex` sees EOF naturally -- the `/bin/sh
+-    ... < /dev/null` wrapper the default runner needs is unnecessary
+-    here. Before 0.3.4 forcola left the child's stdin open, and `codex
+-    exec` would print "Reading additional input from stdin..." and hang
+-    until the timeout elapsed. The `~> 0.7.0` dependency floor includes
+-    this fix, raw output observation and bounded one-shot termination evidence.
++    Prompts use a private file opened and unlinked by a short shell launcher
++    before it execs codex. The launcher retains the target's process group and
++    one-shot signal schedule. Without prompt input, forcola closes stdin
++    immediately after spawn, so commands reading stdin see EOF.
+ 
+     forcola requires a finite whole-run bound. Synchronous commands with
+     no `:timeout` use `forcola_default_timeout_ms` (five minutes by
+@@ -59,6 +56,8 @@ if Code.ensure_loaded?(Forcola) do
+ 
+     @behaviour CodexWrapper.Runner
+ 
++    alias CodexWrapper.{Argv, StdinFile}
++
+     # forcola requires a mandatory whole-run bound. When the caller sets no
+     # timeout we still want group-kill-on-BEAM-death, so we substitute a
+     # configurable default rather than falling back to the leaky path.
+@@ -118,28 +117,30 @@ if Code.ensure_loaded?(Forcola) do
+ 
+     @impl true
+     def run(binary, args, opts, timeout) do
++      bound = timeout || Keyword.get_lazy(opts, :timeout_ms, fn -> effective_timeout(nil) end)
++
+       with :ok <- validate_options(Keyword.take(opts, @transport_options)) do
+-        Forcola.run([binary | args], one_shot_opts(opts, timeout))
+-        |> project(
+-          timeout || Keyword.get_lazy(opts, :timeout_ms, fn -> effective_timeout(nil) end),
+-          false
+-        )
++        with_launch(binary, args, opts, fn argv ->
++          Forcola.run(argv, one_shot_opts(opts, timeout))
++          |> project(bound, false)
++        end)
+       end
+     end
+ 
+     @impl true
+     def run_observed(binary, args, opts, timeout, target) do
++      bound = timeout || Keyword.get_lazy(opts, :timeout_ms, fn -> effective_timeout(nil) end)
++
+       with :ok <- validate_options(Keyword.take(opts, @transport_options)) do
+-        forcola_opts =
+-          one_shot_opts(opts, timeout)
+-          |> Keyword.put(:merge_stderr, false)
+-          |> Keyword.put(:output_observer, target)
+-
+-        Forcola.run([binary | args], forcola_opts)
+-        |> project(
+-          timeout || Keyword.get_lazy(opts, :timeout_ms, fn -> effective_timeout(nil) end),
+-          true
+-        )
++        with_launch(binary, args, opts, fn argv ->
++          forcola_opts =
++            one_shot_opts(opts, timeout)
++            |> Keyword.put(:merge_stderr, false)
++            |> Keyword.put(:output_observer, target)
++
++          Forcola.run(argv, forcola_opts)
++          |> project(bound, true)
++        end)
+       end
+     end
+ 
+@@ -150,27 +151,120 @@ if Code.ensure_loaded?(Forcola) do
+ 
+     @impl true
+     def run_evidenced(binary, args, opts, timeout, target) do
+-      # A 0.6 collector cannot prove the new contract. Refuse before Forcola.run
+-      # or shim discovery; an unresolved 0.6 dependency must not silently run it.
+-      case validate_evidence() do
+-        :ok ->
+-          bound = timeout || Keyword.get_lazy(opts, :timeout_ms, fn -> effective_timeout(nil) end)
++      bound = timeout || Keyword.get_lazy(opts, :timeout_ms, fn -> effective_timeout(nil) end)
++
++      # Capability and argv failures carry no fabricated native child status.
++      result =
++        with :ok <- validate_evidence(),
++             :ok <- validate_options(Keyword.take(opts, @transport_options)) do
++          with_launch(binary, args, opts, fn argv ->
++            forcola_opts =
++              one_shot_opts(opts, timeout)
++              |> Keyword.put(:merge_stderr, false)
++              |> Keyword.put(:output_observer, target)
++              |> Keyword.put_new(:idle_timeout_ms, @default_timeout_ms)
++              |> Keyword.put_new(:max_output_bytes, 1_048_576)
++
++            outcome = Forcola.run(argv, forcola_opts)
++            {project(outcome, bound, true), evidence(outcome)}
++          end)
++        end
+ 
+-          forcola_opts =
+-            one_shot_opts(opts, timeout)
+-            |> Keyword.put(:merge_stderr, false)
+-            |> Keyword.put(:output_observer, target)
+-            |> Keyword.put_new(:idle_timeout_ms, @default_timeout_ms)
+-            |> Keyword.put_new(:max_output_bytes, 1_048_576)
++      case result do
++        {:error, _} = error -> {error, %{termination: :pre_spawn}}
++        outcome -> outcome
++      end
++    end
+ 
+-          outcome = Forcola.run([binary | args], forcola_opts)
+-          {project(outcome, bound, true), evidence(outcome)}
++    defp with_launch(binary, args, opts, fun) do
++      with :ok <- Argv.validate(binary, args, opts),
++           {:ok, binary} <- prompt_executable(binary, opts) do
++        StdinFile.with_file(opts, &validated_launch(launch(binary, args, &1), opts, fun))
++      end
++    end
+ 
+-        {:error, _} = error ->
+-          {error, %{termination: :pre_spawn}}
++    # Spawning the stdin launcher succeeds even if its later exec would fail.
++    # Resolve that executable first to retain the native runner's spawn-error
++    # contract. Keep exit 126/127 from a successfully started target unchanged.
++    # The OS still owns the final check if the executable changes after this one.
++    defp prompt_executable(binary, opts) do
++      if is_binary(opts[:stdin]) do
++        directory = Path.absname(to_string(opts[:cd] || File.cwd!()))
++        candidates = executable_candidates(binary, opts, directory)
++
++        case Enum.find_value(candidates, &System.find_executable/1) do
++          nil -> {:error, {:spawn, :executable_not_found}}
++          path -> {:ok, path}
++        end
++      else
++        {:ok, binary}
+       end
+     end
+ 
++    defp executable_candidates(binary, opts, directory) do
++      if String.contains?(binary, "/") do
++        [Path.absname(binary, directory)]
++      else
++        opts
++        |> executable_path()
++        |> String.split(":")
++        |> Enum.map(&Path.absname(Path.join(&1, binary), directory))
++      end
++    end
++
++    defp executable_path(opts) do
++      inherited = if opts[:env_mode] == :replace, do: nil, else: System.get_env("PATH")
++
++      opts
++      |> Keyword.get(:env, [])
++      |> CodexWrapper.Config.validate_env!()
++      |> Enum.reduce(inherited, fn
++        {"PATH", value}, _previous -> if is_binary(value), do: value
++        _entry, previous -> previous
++      end)
++      |> Kernel.||(default_executable_path())
++    end
++
++    defp default_executable_path do
++      case System.cmd("/usr/bin/getconf", ["PATH"], stderr_to_stdout: true) do
++        {path, 0} -> String.trim(path)
++        _ -> "/bin:/usr/bin"
++      end
++    rescue
++      ErlangError -> "/bin:/usr/bin"
++    end
++
++    defp validated_launch([executable | args] = argv, opts, fun) do
++      with :ok <- Argv.validate(executable, args, opts) do
++        fun.(argv)
++      end
++    end
++
++    # exec retains the process group and signal schedule owned by Forcola.
++    # The only prompt reference in argv is its private temporary path.
++    @stdin_launcher """
++    stdin_file=$1
++    stdin_directory=$2
++    shift 2
++    exec <"$stdin_file" || exit 125
++    /bin/rm -f -- "$stdin_file" || exit 125
++    /bin/rmdir -- "$stdin_directory" || exit 125
++    exec "$@"
++    """
++
++    defp launch(binary, args, nil), do: [binary | args]
++
++    defp launch(binary, args, path),
++      do: [
++        "/bin/sh",
++        "-c",
++        @stdin_launcher,
++        "codex-wrapper",
++        path,
++        Path.dirname(path),
++        binary | args
++      ]
++
+     @doc false
+     # One-shot options for `Forcola.run/2`. Without caller interrupt options,
+     # SIGINT goes to the group first: codex stops its own tool commands on
+@@ -292,11 +386,32 @@ if Code.ensure_loaded?(Forcola) do
+           do: Keyword.put(stream_opts, :idle_timeout_ms, idle_timeout_ms),
+           else: stream_opts
+ 
+-      unsets
+-      |> env_unset_prefix()
+-      |> Kernel.++([binary | args])
+-      |> Forcola.Stream.lines(stream_opts)
+-      |> halt_on_error(timeout, idle_timeout_ms)
++      Stream.flat_map([nil], fn _ ->
++        validated_stream(binary, args, opts, stream_opts, unsets)
++      end)
++    end
++
++    defp validated_stream(binary, args, opts, stream_opts, unsets) do
++      # Stream always inherits the environment; env -u applies its removals.
++      opts = Keyword.delete(opts, :env_mode)
++
++      with :ok <- Argv.validate(binary, args, opts),
++           {:ok, binary} <- prompt_executable(binary, opts) do
++        StdinFile.stream(opts, fn path ->
++          argv = env_unset_prefix(unsets) ++ launch(binary, args, path)
++          stream_with_stdin(argv, stream_opts)
++        end)
++      else
++        {:error, _} = error ->
++          [error]
++      end
++    end
++
++    defp stream_with_stdin(argv, opts) do
++      case validated_launch(argv, opts, &Forcola.Stream.lines(&1, opts)) do
++        {:error, _} = error -> [error]
++        stream -> halt_on_error(stream, opts[:timeout_ms], opts[:idle_timeout_ms])
++      end
+     end
+ 
+     # `Forcola.Stream` rejects `:env_mode`, so a stream removes variables
+diff --git a/lib/codex_wrapper/runner/port.ex b/lib/codex_wrapper/runner/port.ex
+index 89276f5..27346d2 100644
+--- a/lib/codex_wrapper/runner/port.ex
++++ b/lib/codex_wrapper/runner/port.ex
+@@ -1,7 +1,7 @@
+ defmodule CodexWrapper.Runner.Port do
+   @moduledoc """
+-  Default runner: a `/bin/sh` `Port` with stdin redirected from
+-  `/dev/null` (Codex CLI hangs if stdin is inherited from the parent),
++  Default runner: a `/bin/sh` `Port` with stdin redirected from a private
++  prompt file, or `/dev/null` when no input is supplied,
+   wrapped in a `Task` for timeout enforcement.
+ 
+   ## Cleanup
+@@ -52,7 +52,7 @@ defmodule CodexWrapper.Runner.Port do
+ 
+   @behaviour CodexWrapper.Runner
+ 
+-  alias CodexWrapper.Command
++  alias CodexWrapper.{Argv, Command, StdinFile}
+ 
+   # Idle bound between output frames when the caller sets no idle timeout.
+   @default_idle_timeout_ms 300_000
+@@ -67,17 +67,51 @@ defmodule CodexWrapper.Runner.Port do
+ 
+   @impl true
+   def run(binary, args, opts, timeout) do
+-    task = Task.async(fn -> run_with_closed_stdin(binary, args, opts) end)
+-    effective_timeout = timeout || :infinity
++    opts = Keyword.delete(opts, :env_mode)
+ 
+-    case Task.yield(task, effective_timeout) || Task.shutdown(task, :brutal_kill) do
+-      {:ok, {stdout, code}} -> {:ok, {stdout, code}}
+-      nil -> {:error, :timeout}
++    with :ok <- Argv.validate(binary, args, opts) do
++      StdinFile.with_file(opts, &run_with_file(binary, args, opts, timeout, &1))
++    end
++  end
++
++  defp run_with_file(binary, args, opts, timeout, path) do
++    shell_args = Command.shell_cmd_args(binary, args, capture_stderr: true, stdin_file: path)
++
++    with :ok <- Argv.validate("/bin/sh", shell_args, opts) do
++      task = Task.async(fn -> run_with_stdin(shell_args, opts) end)
++      effective_timeout = timeout || :infinity
++
++      case Task.yield(task, effective_timeout) || Task.shutdown(task, :brutal_kill) do
++        {:ok, result} -> result
++        nil -> {:error, :timeout}
++      end
+     end
+   end
+ 
+   @impl true
+   def stream_lines(binary, args, opts, timeout) do
++    opts = Keyword.delete(opts, :env_mode)
++
++    Stream.flat_map([nil], fn _ -> validated_stream(binary, args, opts, timeout) end)
++  end
++
++  defp validated_stream(binary, args, opts, timeout) do
++    case Argv.validate(binary, args, opts) do
++      :ok -> StdinFile.stream(opts, &stream_with_stdin(binary, args, opts, timeout, &1))
++      {:error, _} = error -> [error]
++    end
++  end
++
++  defp stream_with_stdin(binary, args, opts, timeout, path) do
++    shell_args = Command.shell_cmd_args(binary, args, stdin_file: path)
++
++    case Argv.validate("/bin/sh", shell_args, opts) do
++      :ok -> open_stream(shell_args, opts, timeout)
++      {:error, _} = error -> [error]
++    end
++  end
++
++  defp open_stream(shell_args, opts, timeout) do
+     idle_timeout = Keyword.get(opts, :idle_timeout_ms, @default_idle_timeout_ms)
+ 
+     port_opts =
+@@ -85,21 +119,30 @@ defmodule CodexWrapper.Runner.Port do
+         :binary,
+         :exit_status,
+         {:line, @port_line_bytes},
+-        {:args, Command.shell_cmd_args(binary, args)}
++        {:args, shell_args}
+       ]
+       |> maybe_add(:cd, stream_cd(opts))
+       |> maybe_add_env(Keyword.get(opts, :env, []))
+ 
+     Stream.resource(
+-      fn ->
+-        deadline = if timeout, do: System.monotonic_time(:millisecond) + timeout
+-        {Port.open({:spawn_executable, "/bin/sh"}, port_opts), :running, deadline}
+-      end,
++      fn -> start_port(port_opts, timeout) end,
+       fn state -> next_line(state, idle_timeout, timeout) end,
+       &close_port/1
+     )
+   end
+ 
++  defp start_port(port_opts, timeout) do
++    deadline = if timeout, do: System.monotonic_time(:millisecond) + timeout
++    {Port.open({:spawn_executable, "/bin/sh"}, port_opts), :running, deadline}
++  catch
++    :error, reason -> {:start_error, {:spawn, reason}}
++  end
++
++  defp next_line({:start_error, reason}, _idle_timeout, _timeout),
++    do: {[{:error, reason}], {:start_failed, nil}}
++
++  defp next_line({:start_failed, nil} = state, _idle_timeout, _timeout), do: {:halt, state}
++
+   defp next_line({_port, :timed_out, _deadline} = state, _idle_timeout, _timeout),
+     do: {:halt, state}
+ 
+@@ -186,6 +229,8 @@ defmodule CodexWrapper.Runner.Port do
+   # The process exited on its own, so the port is already gone. Asking it
+   # to close would just block until `@close_timeout_ms` for a `:closed`
+   # that can never arrive.
++  defp close_port({status, _}) when status in [:start_error, :start_failed], do: :ok
++
+   defp close_port({_port, :exited, _deadline}), do: :ok
+ 
+   defp close_port({port, :failed_after_exit, _deadline}), do: drain_completed_port(port)
+@@ -247,7 +292,7 @@ defmodule CodexWrapper.Runner.Port do
+     end
+   end
+ 
+-  defp run_with_closed_stdin(binary, args, opts) do
++  defp run_with_stdin(shell_args, opts) do
+     env = Keyword.get(opts, :env, [])
+ 
+     port_opts =
+@@ -255,13 +300,15 @@ defmodule CodexWrapper.Runner.Port do
+         :binary,
+         :exit_status,
+         :stderr_to_stdout,
+-        args: Command.shell_cmd_args(binary, args, capture_stderr: true)
++        args: shell_args
+       ]
+       |> maybe_add(:cd, stream_cd(opts))
+       |> maybe_add_env(env)
+ 
+     port = Port.open({:spawn_executable, "/bin/sh"}, port_opts)
+-    collect_port_output(port, "")
++    {:ok, collect_port_output(port, "")}
++  catch
++    :error, reason -> {:error, {:spawn, reason}}
+   end
+ 
+   defp collect_port_output(port, acc) do
+diff --git a/lib/codex_wrapper/session.ex b/lib/codex_wrapper/session.ex
+index 90a30c3..3313dcd 100644
+--- a/lib/codex_wrapper/session.ex
++++ b/lib/codex_wrapper/session.ex
+@@ -56,6 +56,9 @@ defmodule CodexWrapper.Session do
+     * `:sandbox` and `:approval_policy` are emitted on resumed turns as
+       `-c sandbox_mode="..."` and `-c approval_policy="..."`.
+ 
++  Prompts use stdin by default. `:prompt_input` can be set for the session
++  or overridden on any `send/3` or `stream/3` call.
++
+   An unknown option, or a value of the wrong type, raises `ArgumentError`.
+   """
+   @spec new(Config.t(), keyword()) :: t()
+diff --git a/lib/codex_wrapper/stdin_file.ex b/lib/codex_wrapper/stdin_file.ex
+new file mode 100644
+index 0000000..8525f4f
+--- /dev/null
++++ b/lib/codex_wrapper/stdin_file.ex
+@@ -0,0 +1,79 @@
++defmodule CodexWrapper.StdinFile do
++  @moduledoc false
++
++  # File.mkdir/open cannot set creation permissions. Restrict only this shell's
++  # umask, leaving the VM and concurrent callers untouched. No prompt bytes are
++  # passed to the shell. A successful mkdir establishes exclusive ownership.
++  @create_script """
++  umask 077
++  /bin/mkdir "$1" || exit 1
++  : > "$1/prompt" || { /bin/rmdir "$1"; exit 2; }
++  """
++
++  @doc false
++  def with_file(opts, fun) do
++    with {:ok, path} <- create(Keyword.get(opts, :stdin)) do
++      try do
++        fun.(path)
++      after
++        cleanup(path)
++      end
++    end
++  end
++
++  @doc false
++  def stream(opts, fun) do
++    Stream.resource(
++      fn -> create(Keyword.get(opts, :stdin)) end,
++      &next/1,
++      &close_stream/1
++    )
++    |> Stream.flat_map(fn
++      {:ok, path} -> fun.(path)
++      {:error, _} = error -> [error]
++    end)
++  end
++
++  defp next({:ok, path} = input), do: {[input], {:done, path}}
++  defp next({:error, _} = error), do: {[error], {:done, nil}}
++  defp next({:done, _} = state), do: {:halt, state}
++
++  defp close_stream({:error, _}), do: :ok
++  defp close_stream({_state, path}), do: cleanup(path)
++
++  defp create(nil), do: {:ok, nil}
++
++  defp create(input) when is_binary(input) do
++    suffix = Base.url_encode64(:erlang.term_to_binary(make_ref()), padding: false)
++    directory = Path.join(System.tmp_dir!(), "codex-wrapper-stdin-" <> suffix)
++
++    case System.cmd("/bin/sh", ["-c", @create_script, "codex-wrapper-stdin", directory],
++           stderr_to_stdout: true
++         ) do
++      {_, 0} -> write_input(Path.join(directory, "prompt"), input)
++      {_, status} -> {:error, {:stdin_file, {:create, status}}}
++    end
++  rescue
++    error in ErlangError -> {:error, {:stdin_file, error.original}}
++    error in File.Error -> {:error, {:stdin_file, error.reason}}
++  end
++
++  defp write_input(path, input) do
++    case File.write(path, input, [:binary]) do
++      :ok ->
++        {:ok, path}
++
++      {:error, reason} ->
++        cleanup(path)
++        {:error, {:stdin_file, {:write, reason}}}
++    end
++  end
++
++  defp cleanup(nil), do: :ok
++
++  defp cleanup(path) do
++    File.rm(path)
++    File.rmdir(Path.dirname(path))
++    :ok
++  end
++end
+diff --git a/lib/codex_wrapper/stream_error.ex b/lib/codex_wrapper/stream_error.ex
+index 12a3706..404545b 100644
+--- a/lib/codex_wrapper/stream_error.ex
++++ b/lib/codex_wrapper/stream_error.ex
+@@ -9,6 +9,10 @@ defmodule CodexWrapper.StreamError do
+   means codex exited nonzero (127 when the executable was not found on
+   `Runner.Port`); `{:spawn, reason}` means it could not be started;
+   `{:signal, signal}` means `Runner.Forcola` reported death by signal.
++  `{:argument_list_too_long, details}` means the argument list or environment
++  exceeded the pre-spawn size bound; details contain sizes without contents.
++  `{:invalid_argument, index}` identifies an argument containing NUL.
++  `{:stdin_file, reason}` means prompt-file preparation failed.
+   """
+ 
+   @type t :: %__MODULE__{reason: term()}
+diff --git a/test/codex_wrapper/argv_test.exs b/test/codex_wrapper/argv_test.exs
+new file mode 100644
+index 0000000..d72d0bc
+--- /dev/null
++++ b/test/codex_wrapper/argv_test.exs
+@@ -0,0 +1,162 @@
++defmodule CodexWrapper.ArgvTest do
++  use ExUnit.Case, async: true
++
++  alias CodexWrapper.{Argv, Config, Exec, ExecutionObservation, StreamError}
++
++  @moduletag :tmp_dir
++
++  test "counts UTF-8 bytes and the terminating NUL for individual arguments" do
++    limits = %{total: 100_000, string: 5}
++    assert :ok = Argv.validate("sh", ["éé"], [env_mode: :replace], limits)
++
++    assert {:error, {:argument_list_too_long, %{kind: :argument, bytes: 6, limit: 5}}} =
++             Argv.validate("sh", ["ééx"], [env_mode: :replace], limits)
++  end
++
++  test "many small arguments can exceed the aggregate limit" do
++    limits = %{total: 32_768, string: 131_072}
++
++    assert {:error, {:argument_list_too_long, %{kind: :total}}} =
++             Argv.validate("sh", List.duplicate("", 4_000), [env_mode: :replace], limits)
++  end
++
++  test "environment entries count and repeated updates use their final value" do
++    limits = %{total: 100_000, string: 20}
++    huge = String.duplicate("secret", 20)
++
++    assert {:error, {:argument_list_too_long, %{kind: :environment}}} =
++             Argv.validate("sh", [], [env_mode: :replace, env: [{"KEY", huge}]], limits)
++
++    assert :ok =
++             Argv.validate(
++               "sh",
++               [],
++               [env_mode: :replace, env: [{"KEY", huge}, {"KEY", false}]],
++               limits
++             )
++  end
++
++  test "rejects NUL without returning argument contents" do
++    assert {:error, {:invalid_argument, 1}} = Argv.validate("sh", ["private\0value"], [])
++  end
++
++  for runner <- [CodexWrapper.Runner.Port, CodexWrapper.Runner.Forcola] do
++    @runner runner
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} rejects oversized argv before the target starts", %{tmp_dir: dir} do
++      {binary, marker} = marker_cli(dir)
++      # Individually small strings also exercise the aggregate limit on Linux.
++      args = List.duplicate(String.duplicate("x", 16_384), div(Argv.limits().total, 16_384) + 1)
++
++      assert {:error, {:argument_list_too_long, %{kind: :total}}} =
++               @runner.run(binary, args, [], 5_000)
++
++      assert [{:error, {:argument_list_too_long, %{kind: :total}}}] =
++               @runner.stream_lines(binary, args, [], 5_000) |> Enum.to_list()
++
++      refute File.exists?(marker)
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} rejects a large compatibility prompt with a typed error", %{
++      tmp_dir: dir
++    } do
++      {binary, marker} = marker_cli(dir)
++      prompt = String.duplicate("private", div(Argv.limits().total, 7) + 1)
++      exec = Exec.new(prompt) |> Exec.prompt_input(:argv)
++      config = Config.new(binary: binary, runner: @runner)
++
++      assert {:error, {:argument_list_too_long, details}} = Exec.execute(exec, config)
++      assert details.kind in [:argument, :total]
++      refute inspect(details) =~ "private"
++
++      assert [%StreamError{reason: {:argument_list_too_long, _}}] =
++               Exec.stream(exec, config) |> Enum.to_list()
++
++      refute File.exists?(marker)
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} enforces the Linux per-string ceiling", %{tmp_dir: dir} do
++      if :os.type() == {:unix, :linux} do
++        {binary, marker} = marker_cli(dir)
++        limit = Argv.limits().string
++
++        assert {:error, {:argument_list_too_long, %{kind: :argument, limit: ^limit}}} =
++                 @runner.run(binary, [String.duplicate("x", limit)], [], 5_000)
++
++        refute File.exists?(marker)
++      end
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} rejects oversized environment before the target starts", %{
++      tmp_dir: dir
++    } do
++      {binary, marker} = marker_cli(dir)
++      private = String.duplicate("private", div(Argv.limits().total, 7) + 1)
++      opts = [env: [{"PROMPT_TEST_ENV", private}]]
++
++      assert {:error, {:argument_list_too_long, details}} =
++               @runner.run(binary, [], opts, 5_000)
++
++      assert details.kind in [:environment, :total]
++      refute inspect(details) =~ "private"
++
++      assert [{:error, {:argument_list_too_long, _}}] =
++               @runner.stream_lines(binary, [], opts, 5_000) |> Enum.to_list()
++
++      refute File.exists?(marker)
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} rejects an argument containing NUL before spawning", %{tmp_dir: dir} do
++      {binary, marker} = marker_cli(dir)
++
++      assert {:error, {:invalid_argument, 1}} =
++               @runner.run(binary, ["private\0value"], [], 5_000)
++
++      assert [{:error, {:invalid_argument, 1}}] =
++               @runner.stream_lines(binary, ["private\0value"], [], 5_000) |> Enum.to_list()
++
++      refute File.exists?(marker)
++    end
++  end
++
++  @tag :forcola
++  test "observed and evidenced failures retain pre-spawn argument errors", %{tmp_dir: dir} do
++    {binary, marker} = marker_cli(dir)
++    prompt = String.duplicate("x", Argv.limits().total)
++    exec = Exec.new(prompt) |> Exec.prompt_input(:argv)
++    config = Config.new(binary: binary, runner: :forcola)
++    reference = make_ref()
++
++    assert {:error, {:argument_list_too_long, _}} =
++             Exec.execute(exec, config, session_observer: {self(), reference})
++
++    assert {:error, {:argument_list_too_long, _}} =
++             Exec.execute(exec, config, execution_observer: {self(), reference})
++
++    assert_receive {^reference,
++                    %ExecutionObservation{
++                      outcome: {:error, {:argument_list_too_long, _}},
++                      termination: :pre_spawn,
++                      child_status: nil
++                    }}
++
++    refute File.exists?(marker)
++  end
++
++  defp marker_cli(dir) do
++    path = Path.join(dir, "cli")
++    marker = Path.join(dir, "spawned")
++    File.write!(path, "#!/bin/sh\n: > \"$(dirname \"$0\")/spawned\"\n")
++    File.chmod!(path, 0o700)
++    {path, marker}
++  end
++end
+diff --git a/test/codex_wrapper/exec_fork_test.exs b/test/codex_wrapper/exec_fork_test.exs
+index c521fbc..ea9bdaf 100644
+--- a/test/codex_wrapper/exec_fork_test.exs
++++ b/test/codex_wrapper/exec_fork_test.exs
+@@ -74,7 +74,13 @@ defmodule CodexWrapper.ExecForkTest do
+     end
+ 
+     test "a prompt beginning with - is passed after the terminator" do
+-      args = @source |> ExecFork.new() |> ExecFork.prompt("-x marks the spot") |> ExecFork.args()
++      args =
++        @source
++        |> ExecFork.new()
++        |> ExecFork.prompt("-x marks the spot")
++        |> ExecFork.prompt_input(:argv)
++        |> ExecFork.args()
++
+       assert args == ["exec", "fork", "--", @source, "-x marks the spot"]
+     end
+ 
+@@ -84,19 +90,26 @@ defmodule CodexWrapper.ExecForkTest do
+         |> ExecFork.new()
+         |> ExecFork.json()
+         |> ExecFork.prompt("--help me compare")
++        |> ExecFork.prompt_input(:argv)
+         |> ExecFork.args()
+ 
+       assert args == ["exec", "fork", "--json", "--", @source, "--help me compare"]
+     end
+ 
+     test "a prompt that is exactly -- is passed after the terminator" do
+-      args = @source |> ExecFork.new() |> ExecFork.prompt("--") |> ExecFork.args()
++      args =
++        @source
++        |> ExecFork.new()
++        |> ExecFork.prompt("--")
++        |> ExecFork.prompt_input(:argv)
++        |> ExecFork.args()
++
+       assert args == ["exec", "fork", "--", @source, "--"]
+     end
+ 
+     test "prompt follows the session id" do
+       args = @source |> ExecFork.new() |> ExecFork.prompt("try again") |> ExecFork.args()
+-      assert args == ["exec", "fork", "--", @source, "try again"]
++      assert args == ["exec", "fork", "--", @source, "-"]
+     end
+ 
+     test "every supported option, in order, with positionals last" do
+@@ -148,7 +161,7 @@ defmodule CodexWrapper.ExecForkTest do
+                "/tmp/last.txt",
+                "--",
+                @source,
+-               "branch off"
++               "-"
+              ]
+     end
+ 
+@@ -305,7 +318,7 @@ defmodule CodexWrapper.ExecForkTest do
+       assert exec.session_id == @source
+ 
+       assert_receive {:runner_run, "codex", args, _opts, 1_000}
+-      assert args == ["exec", "fork", "--json", "--", @source, "branch"]
++      assert args == ["exec", "fork", "--json", "--", @source, "-"]
+     end
+ 
+     test "fork/2 reports a non-zero exit with the result", %{config: config} do
+diff --git a/test/codex_wrapper/exec_resume_test.exs b/test/codex_wrapper/exec_resume_test.exs
+index 3ddc60f..45e511a 100644
+--- a/test/codex_wrapper/exec_resume_test.exs
++++ b/test/codex_wrapper/exec_resume_test.exs
+@@ -123,7 +123,7 @@ defmodule CodexWrapper.ExecResumeTest do
+         |> ExecResume.prompt("continue")
+         |> ExecResume.args()
+ 
+-      assert args == ["exec", "resume", "--", "abc-123", "continue"]
++      assert args == ["exec", "resume", "--", "abc-123", "-"]
+     end
+ 
+     test "with --last flag" do
+@@ -132,7 +132,8 @@ defmodule CodexWrapper.ExecResumeTest do
+     end
+ 
+     test "leading-hyphen and stdin prompts follow the session id" do
+-      base = ExecResume.new() |> ExecResume.session_id("abc-123")
++      base =
++        ExecResume.new() |> ExecResume.session_id("abc-123") |> ExecResume.prompt_input(:argv)
+ 
+       assert base |> ExecResume.prompt("-x") |> ExecResume.args() ==
+                ["exec", "resume", "--", "abc-123", "-x"]
+@@ -156,7 +157,7 @@ defmodule CodexWrapper.ExecResumeTest do
+                "/tmp/response.json",
+                "--",
+                "abc-123",
+-               "continue"
++               "-"
+              ]
+     end
+ 
+@@ -182,7 +183,7 @@ defmodule CodexWrapper.ExecResumeTest do
+                "--json",
+                "--",
+                "abc-123",
+-               "continue"
++               "-"
+              ]
+     end
+ 
+@@ -217,7 +218,7 @@ defmodule CodexWrapper.ExecResumeTest do
+         |> ExecResume.prompt("the prompt")
+         |> ExecResume.args()
+ 
+-      assert Enum.slice(args, -2, 2) == ["sess-1", "the prompt"]
++      assert Enum.slice(args, -2, 2) == ["sess-1", "-"]
+     end
+ 
+     test "boolean flags" do
+@@ -360,7 +361,7 @@ defmodule CodexWrapper.ExecResumeTest do
+         |> ExecResume.ignore_user_config()
+         |> ExecResume.args()
+ 
+-      assert List.last(args) == "continue"
++      assert List.last(args) == "-"
+       assert Enum.at(args, -2) == "abc-123"
+       assert Enum.find_index(args, &(&1 == "--strict-config")) < length(args) - 2
+       assert Enum.find_index(args, &(&1 == "--ignore-user-config")) < length(args) - 2
+diff --git a/test/codex_wrapper/exec_test.exs b/test/codex_wrapper/exec_test.exs
+index 6db9dc4..586cd8f 100644
+--- a/test/codex_wrapper/exec_test.exs
++++ b/test/codex_wrapper/exec_test.exs
+@@ -11,6 +11,7 @@ defmodule CodexWrapper.ExecTest do
+ 
+     test "defaults" do
+       exec = Exec.new("prompt")
++      assert exec.prompt_input == :stdin
+       assert exec.model == nil
+       assert exec.profile == nil
+       assert exec.sandbox == nil
+@@ -145,12 +146,12 @@ defmodule CodexWrapper.ExecTest do
+   describe "args/1" do
+     test "minimal args" do
+       args = Exec.new("fix the test") |> Exec.args()
+-      assert args == ["exec", "--", "fix the test"]
++      assert args == ["exec", "--", "-"]
+     end
+ 
+-    test "leading-hyphen and stdin prompts are positional" do
+-      assert Exec.new("-x") |> Exec.args() == ["exec", "--", "-x"]
+-      assert Exec.new("-") |> Exec.args() == ["exec", "--", "-"]
++    test "argv mode preserves leading-hyphen and dash positionals" do
++      assert Exec.new("-x") |> Exec.prompt_input(:argv) |> Exec.args() == ["exec", "--", "-x"]
++      assert Exec.new("-") |> Exec.prompt_input(:argv) |> Exec.args() == ["exec", "--", "-"]
+     end
+ 
+     test "full args match Rust ordering" do
+@@ -176,7 +177,7 @@ defmodule CodexWrapper.ExecTest do
+                "--ephemeral",
+                "--json",
+                "--",
+-               "fix the test"
++               "-"
+              ]
+     end
+ 
+@@ -187,7 +188,7 @@ defmodule CodexWrapper.ExecTest do
+         |> Exec.profile("fast")
+         |> Exec.args()
+ 
+-      assert args == ["exec", "--model", "o3", "--profile", "fast", "--", "prompt"]
++      assert args == ["exec", "--model", "o3", "--profile", "fast", "--", "-"]
+     end
+ 
+     test "profile is omitted when unset" do
+@@ -239,7 +240,7 @@ defmodule CodexWrapper.ExecTest do
+ 
+     test "search/1 emits the web_search config key set to live" do
+       args = Exec.new("p") |> Exec.search() |> Exec.args()
+-      assert args == ["exec", "-c", ~s(web_search="live"), "--", "p"]
++      assert args == ["exec", "-c", ~s(web_search="live"), "--", "-"]
+     end
+ 
+     test "search/2 emits each web search mode" do
+@@ -280,13 +281,13 @@ defmodule CodexWrapper.ExecTest do
+                "-c",
+                ~s(web_search="live"),
+                "--",
+-               "p"
++               "-"
+              ]
+     end
+ 
+     test "an explicit web_search config override is left alone" do
+       args = Exec.new("p") |> Exec.config(~s(web_search="cached")) |> Exec.args()
+-      assert args == ["exec", "-c", ~s(web_search="cached"), "--", "p"]
++      assert args == ["exec", "-c", ~s(web_search="cached"), "--", "-"]
+     end
+ 
+     test "sandbox modes" do
+@@ -338,7 +339,7 @@ defmodule CodexWrapper.ExecTest do
+                "-c",
+                ~s(approval_policy="never"),
+                "--",
+-               "p"
++               "-"
+              ]
+     end
+ 
+@@ -348,7 +349,7 @@ defmodule CodexWrapper.ExecTest do
+         |> Exec.config(~s(approval_policy="untrusted"))
+         |> Exec.args()
+ 
+-      assert args == ["exec", "-c", ~s(approval_policy="untrusted"), "--", "p"]
++      assert args == ["exec", "-c", ~s(approval_policy="untrusted"), "--", "-"]
+     end
+ 
+     test "prompt is always last" do
+@@ -358,7 +359,7 @@ defmodule CodexWrapper.ExecTest do
+         |> Exec.json()
+         |> Exec.args()
+ 
+-      assert List.last(args) == "the prompt"
++      assert List.last(args) == "-"
+     end
+   end
+ 
+diff --git a/test/codex_wrapper/observed_execution_test.exs b/test/codex_wrapper/observed_execution_test.exs
+index ee20ba5..4f4bf57 100644
+--- a/test/codex_wrapper/observed_execution_test.exs
++++ b/test/codex_wrapper/observed_execution_test.exs
+@@ -337,7 +337,7 @@ defmodule CodexWrapper.ObservedExecutionTest do
+     assert argv =~ "--model\ncodex-model\n"
+     assert argv =~ "--output-schema\nschema.json\n"
+     assert argv =~ ~s(approval_policy="never")
+-    assert argv =~ "--\n-prompt\n"
++    assert argv =~ "--\n-\n"
+     refute argv =~ "session_observer"
+     assert {:ok, [_started, _completed]} = CodexWrapper.exec_json("p", opts)
+     assert_observation(context)
+@@ -415,7 +415,12 @@ defmodule CodexWrapper.ObservedExecutionTest do
+     assert length(pids) == 2
+ 
+     Enum.each(pids, fn pid ->
+-      await(fn -> elem(System.cmd("kill", ["-0", pid], stderr_to_stdout: true), 1) != 0 end)
++      # A background sleep inherits ignored SIGINT. Allow the default two-second
++      # INT grace, then SIGTERM delivery and OS reaping, before requiring it gone.
++      await(
++        fn -> elem(System.cmd("kill", ["-0", pid], stderr_to_stdout: true), 1) != 0 end,
++        System.monotonic_time(:millisecond) + 5_000
++      )
+     end)
+   end
+ 
+diff --git a/test/codex_wrapper/options_test.exs b/test/codex_wrapper/options_test.exs
+index 249c763..6a78958 100644
+--- a/test/codex_wrapper/options_test.exs
++++ b/test/codex_wrapper/options_test.exs
+@@ -35,6 +35,24 @@ defmodule CodexWrapper.OptionsTest do
+     {[disable: "f2"], ["--disable", "f2"]}
+   ]
+ 
++  test "prompt_input routes through every keyword builder" do
++    for mode <- [:stdin, :argv] do
++      assert Options.exec("hello", prompt_input: mode).prompt_input == mode
++      assert Options.exec_resume("session", "hello", prompt_input: mode).prompt_input == mode
++      assert Options.review(prompt: "hello", prompt_input: mode).prompt_input == mode
++    end
++
++    assert Exec.args(Options.exec("hello", prompt_input: :argv)) == ["exec", "--", "hello"]
++
++    for build <- [
++          fn -> Options.exec("hello", prompt_input: :file) end,
++          fn -> Options.exec_resume("session", "hello", prompt_input: :file) end,
++          fn -> Options.review(prompt_input: :file) end
++        ] do
++      assert_raise ArgumentError, ~r/:prompt_input expects one of/, build
++    end
++  end
++
+   describe "exec/2" do
+     for {opts, fragment} <- @exec_rows do
+       @opts opts
+@@ -43,13 +61,13 @@ defmodule CodexWrapper.OptionsTest do
+       test "maps #{inspect(opts)}" do
+         args = Exec.args(Options.exec("hello", @opts))
+         assert contains?(args, @fragment), "#{inspect(@fragment)} not in #{inspect(args)}"
+-        assert List.last(args) == "hello"
++        assert List.last(args) == "-"
+       end
+     end
+ 
+     test "false booleans emit nothing" do
+       args = Exec.args(Options.exec("hi", full_auto: false, oss: false, search: false))
+-      assert args == ["exec", "--", "hi"]
++      assert args == ["exec", "--", "-"]
+     end
+ 
+     test "list values emit one flag each" do
+@@ -156,7 +174,7 @@ defmodule CodexWrapper.OptionsTest do
+       assert "--ignore-user-config" in args
+       assert "--strict-config" in args
+       assert "--ignore-rules" in args
+-      assert Enum.take(args, -3) == ["--", "thread-A", "next"]
++      assert Enum.take(args, -3) == ["--", "thread-A", "-"]
+     end
+ 
+     test "raises on a first-turn-only option" do
+@@ -236,7 +254,7 @@ defmodule CodexWrapper.OptionsTest do
+       assert turn2 =~ "[--ignore-rules]"
+       assert turn2 =~ "[--model] [m1]"
+       refute turn2 =~ "--profile"
+-      assert turn2 =~ "[--] [thread-A] [second]"
++      assert turn2 =~ "[--] [thread-A] [-]"
+     end
+ 
+     test "an explicit sandbox wins over full_auto on resumed turns", ctx do
+diff --git a/test/codex_wrapper/prompt_stdin_lifecycle_test.exs b/test/codex_wrapper/prompt_stdin_lifecycle_test.exs
+new file mode 100644
+index 0000000..b603b4b
+--- /dev/null
++++ b/test/codex_wrapper/prompt_stdin_lifecycle_test.exs
+@@ -0,0 +1,185 @@
++defmodule CodexWrapper.PromptStdinLifecycleTest do
++  use ExUnit.Case, async: true
++
++  alias CodexWrapper.{Config, Exec, ExecFork, ExecResume, Review, StreamError}
++
++  @moduletag :tmp_dir
++  @probe Path.expand("../fixtures/fake_codex_stdin", __DIR__)
++  @session_id "019b1e96-6935-7a02-a61e-325504b0b832"
++  @timeout_ms 1_500
++
++  for runner <- [CodexWrapper.Runner.Port, CodexWrapper.Runner.Forcola] do
++    @runner runner
++
++    for mode <- [:execute, :stream] do
++      @mode mode
++      if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++      test "#{inspect(runner)} #{@mode} keeps every command's prompt out of ps", %{tmp_dir: dir} do
++        for module <- [Exec, ExecResume, Review, ExecFork] do
++          probe_dir = Path.join(dir, inspect(module))
++          File.mkdir!(probe_dir)
++          marker = "private-prompt-#{System.unique_integer([:positive])}"
++          prompt = marker <> " 'quotes' $dollar λ"
++          command = command(module, prompt)
++          config = config(@runner, probe_dir, 20_000)
++          task = Task.async(fn -> consume(module, command, config, @mode) end)
++          data = wait_ready(probe_dir)
++          on_exit(fn -> stop_probe(probe_dir) end)
++
++          assert List.last(data["argv"]) == "-"
++          assert data["stdin_bytes"] == byte_size(prompt)
++          assert data["stdin_links"] == 0
++          {processes, 0} = System.cmd("ps", ["-Aww", "-o", "pid=", "-o", "args="])
++
++          target_row =
++            processes
++            |> String.split("\n")
++            |> Enum.find(&String.match?(&1, ~r/^\s*#{data["pid"]}\s/))
++
++          assert target_row
++          assert target_row =~ @probe
++          refute processes =~ marker
++
++          File.touch!(Path.join(probe_dir, "release"))
++          assert_success(Task.await(task, 5_000), @mode)
++        end
++      end
++
++      if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++      test "#{inspect(runner)} #{@mode} timeout still escalates after stdin delivery", %{
++        tmp_dir: dir
++      } do
++        command = Exec.new("prompt before timeout")
++        config = config(@runner, dir, @timeout_ms)
++        task = Task.async(fn -> consume(Exec, command, config, @mode) end)
++        data = wait_ready(dir)
++        on_exit(fn -> stop_probe(dir) end)
++        assert data["stdin_bytes"] == byte_size(command.prompt)
++        assert data["stdin_links"] == 0
++
++        assert_timeout(Task.await(task, 15_000), @mode)
++        assert wait_until(fn -> not alive?(data["pid"]) end, 5_000)
++
++        # The probe records INT/TERM and continues running. It never exits
++        # voluntarily here, so its death establishes the final KILL stage.
++        expected =
++          if @runner == CodexWrapper.Runner.Forcola and @mode == :stream,
++            do: ["TERM"],
++            else: ["INT", "TERM"]
++
++        received = signals(dir)
++        assert Enum.map(received, &elem(&1, 0)) == expected
++
++        case received do
++          [{"INT", interrupt_at}, {"TERM", terminate_at}] ->
++            assert terminate_at - interrupt_at >= 1.5
++
++          [{"TERM", _}] ->
++            :ok
++        end
++      end
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} early stream halt stops the stdin consumer", %{tmp_dir: dir} do
++      command = Exec.new("prompt before halt")
++      config = config(@runner, dir, 20_000)
++      on_exit(fn -> stop_probe(dir) end)
++      assert [event] = Exec.stream(command, config) |> Enum.take(1)
++      assert event.data["stdin_links"] == 0
++      assert wait_until(fn -> not alive?(event.data["pid"]) end, 5_000)
++    end
++  end
++
++  defp config(runner, dir, timeout) do
++    Config.new(
++      binary: @probe,
++      runner: runner,
++      timeout: timeout,
++      env: [{"STDIN_PROBE_DIR", dir}]
++    )
++  end
++
++  defp command(Exec, prompt), do: Exec.new(prompt)
++
++  defp command(ExecResume, prompt),
++    do: ExecResume.new() |> ExecResume.session_id(@session_id) |> ExecResume.prompt(prompt)
++
++  defp command(Review, prompt), do: Review.new() |> Review.prompt(prompt)
++  defp command(ExecFork, prompt), do: ExecFork.new(@session_id) |> ExecFork.prompt(prompt)
++
++  defp consume(module, command, config, :execute), do: module.execute(command, config)
++
++  defp consume(module, command, config, :stream),
++    do: module.stream(command, config) |> Enum.to_list()
++
++  defp assert_success({:ok, result}, :execute), do: assert(result.success)
++  defp assert_success([%CodexWrapper.JsonLineEvent{}], :stream), do: :ok
++
++  defp assert_timeout({:error, {:timeout, @timeout_ms}}, :execute), do: :ok
++
++  defp assert_timeout([%CodexWrapper.JsonLineEvent{}, %StreamError{reason: reason}], :stream),
++    do: assert(reason == {:timeout, @timeout_ms})
++
++  defp wait_ready(dir) do
++    path = Path.join(dir, "ready")
++    assert wait_until(fn -> File.exists?(path) end, 5_000), "stdin probe did not start"
++    path |> File.read!() |> Jason.decode!()
++  end
++
++  defp signals(dir) do
++    dir
++    |> Path.join("signals")
++    |> File.read!()
++    |> String.split("\n", trim: true)
++    |> Enum.map(fn line ->
++      [name, at] = String.split(line, " ")
++      {name, String.to_float(at)}
++    end)
++  end
++
++  defp stop_probe(dir) do
++    case File.read(Path.join(dir, "ready")) do
++      {:ok, json} ->
++        pid = Jason.decode!(json)["pid"]
++        if alive?(pid), do: System.cmd("kill", ["-9", Integer.to_string(pid)])
++
++      {:error, :enoent} ->
++        :ok
++    end
++  end
++
++  # A zombie is no longer running and cannot retain the prompt descriptor.
++  defp alive?(pid) do
++    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)]) do
++      {output, 0} ->
++        status = String.trim(output)
++        status != "" and not String.starts_with?(status, "Z")
++
++      _ ->
++        false
++    end
++  end
++
++  defp wait_until(fun, timeout_ms) do
++    deadline = System.monotonic_time(:millisecond) + timeout_ms
++    do_wait_until(fun, deadline)
++  end
++
++  defp do_wait_until(fun, deadline) do
++    cond do
++      fun.() ->
++        true
++
++      System.monotonic_time(:millisecond) >= deadline ->
++        false
++
++      true ->
++        Process.sleep(20)
++        do_wait_until(fun, deadline)
++    end
++  end
++end
+diff --git a/test/codex_wrapper/prompt_stdin_test.exs b/test/codex_wrapper/prompt_stdin_test.exs
+new file mode 100644
+index 0000000..83a79ee
+--- /dev/null
++++ b/test/codex_wrapper/prompt_stdin_test.exs
+@@ -0,0 +1,185 @@
++defmodule CodexWrapper.PromptStdinTest do
++  use ExUnit.Case, async: true
++
++  alias CodexWrapper.{Config, Exec, ExecFork, ExecResume, JsonLineEvent, Review, Session}
++
++  @probe Path.expand("../fixtures/fake_codex_stdin", __DIR__)
++  @session_id "019b1e96-6935-7a02-a61e-325504b0b832"
++  @commands [Exec, ExecResume, Review, ExecFork]
++
++  for runner <- [CodexWrapper.Runner.Port, CodexWrapper.Runner.Forcola] do
++    @runner runner
++
++    for command_module <- @commands do
++      @command_module command_module
++
++      if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++      test "#{inspect(command_module)} execute on #{inspect(runner)} delivers a 2 MiB prompt" do
++        prompt = large_prompt()
++        command = command(@command_module, prompt)
++        assert {:ok, result} = @command_module.execute(command, config(@runner))
++        assert_stdin(report(result.stdout), prompt)
++      end
++
++      if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++      test "#{inspect(command_module)} stream on #{inspect(runner)} delivers a 2 MiB prompt" do
++        prompt = large_prompt()
++        command = command(@command_module, prompt)
++        assert [event] = @command_module.stream(command, config(@runner)) |> Enum.to_list()
++        assert_stdin(event.data, prompt)
++      end
++
++      if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++      test "#{inspect(command_module)} on #{inspect(runner)} retains argv mode and literal dash" do
++        prompt = "literal 'quotes' $dollar `backticks`\nUnicode: λ"
++        command = command(@command_module, prompt) |> @command_module.prompt_input(:argv)
++        assert {:ok, result} = @command_module.execute(command, config(@runner))
++        assert_argv(report(result.stdout), prompt)
++        assert [event] = @command_module.stream(command, config(@runner)) |> Enum.to_list()
++        assert_argv(event.data, prompt)
++
++        for mode <- [:stdin, :argv] do
++          literal = command(@command_module, "-") |> @command_module.prompt_input(mode)
++          assert {:ok, result} = @command_module.execute(literal, config(@runner))
++          assert_stdin(report(result.stdout), "-")
++          assert [event] = @command_module.stream(literal, config(@runner)) |> Enum.to_list()
++          assert_stdin(event.data, "-")
++        end
++      end
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "Session initial and resumed sends on #{inspect(runner)} use stdin" do
++      prompt = large_prompt()
++      session = Session.new(config(@runner))
++      assert {:ok, session, result} = Session.send(session, prompt)
++      assert_stdin(report(result.stdout), prompt)
++      assert Session.session_id(session) == @session_id
++      assert {:ok, session, result} = Session.send(session, prompt)
++      assert_stdin(report(result.stdout), prompt)
++      assert Session.turn_count(session) == 2
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "Session initial and resumed streams on #{inspect(runner)} use stdin" do
++      prompt = large_prompt()
++
++      for session <- [Session.new(config(@runner)), Session.resume(config(@runner), @session_id)] do
++        {^session, stream} = Session.stream(session, prompt)
++        assert [event] = Enum.to_list(stream)
++        assert_stdin(event.data, prompt)
++      end
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "Session transport defaults and per-call overrides on #{inspect(runner)}" do
++      session = Session.new(config(@runner), prompt_input: :argv)
++      assert {:ok, session, result} = Session.send(session, "first")
++      assert_argv(report(result.stdout), "first")
++      assert {:ok, session, result} = Session.send(session, "second", prompt_input: :stdin)
++      assert_stdin(report(result.stdout), "second")
++      {^session, stream} = Session.stream(session, "third")
++      assert [event] = Enum.to_list(stream)
++      assert_argv(event.data, "third")
++      {^session, stream} = Session.stream(session, "fourth", prompt_input: :stdin)
++      assert [event] = Enum.to_list(stream)
++      assert_stdin(event.data, "fourth")
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "nil optional prompts on #{inspect(runner)} leave stdin empty" do
++      for command <- [ExecResume.new(), Review.new(), ExecFork.new(@session_id)] do
++        module = command.__struct__
++        assert {:ok, result} = module.execute(command, config(@runner))
++        data = report(result.stdout)
++        assert data["stdin_bytes"] == 0
++        refute "-" in data["argv"]
++      end
++    end
++
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "convenience APIs on #{inspect(runner)} carry stdin and argv options" do
++      opts = [binary: @probe, runner: @runner, timeout: 10_000]
++      assert {:ok, result} = CodexWrapper.exec("convenience", opts)
++      assert_stdin(report(result.stdout), "convenience")
++      assert {:ok, result} = CodexWrapper.review(opts ++ [prompt: "review"])
++      assert_stdin(report(result.stdout), "review")
++      assert [event] = CodexWrapper.stream("stream", opts) |> Enum.to_list()
++      assert_stdin(event.data, "stream")
++      assert {:ok, result} = CodexWrapper.exec("argv", opts ++ [prompt_input: :argv])
++      assert_argv(report(result.stdout), "argv")
++    end
++  end
++
++  for command_module <- @commands do
++    @command_module command_module
++    @tag :forcola
++    test "#{inspect(command_module)} observed and evidenced execution retain stdin" do
++      prompt = large_prompt()
++      command = command(@command_module, prompt)
++      config = config(CodexWrapper.Runner.Forcola)
++      observed_ref = make_ref()
++
++      assert {:ok, result} =
++               @command_module.execute(command, config, session_observer: {self(), observed_ref})
++
++      assert_stdin(report(result.stdout), prompt)
++      assert_receive {^observed_ref, %CodexWrapper.SessionObservation{session_id: @session_id}}
++      evidence_ref = make_ref()
++
++      assert {:ok, result} =
++               @command_module.execute(command, config,
++                 execution_observer: {self(), evidence_ref}
++               )
++
++      assert_stdin(report(result.stdout), prompt)
++
++      assert_receive {^evidence_ref,
++                      %CodexWrapper.ExecutionObservation{child_status: 0, termination: :exit}}
++    end
++  end
++
++  defp config(runner), do: Config.new(binary: @probe, runner: runner, timeout: 10_000)
++
++  defp command(Exec, prompt), do: Exec.new(prompt)
++
++  defp command(ExecResume, prompt),
++    do: ExecResume.new() |> ExecResume.session_id(@session_id) |> ExecResume.prompt(prompt)
++
++  defp command(Review, prompt), do: Review.new() |> Review.prompt(prompt)
++  defp command(ExecFork, prompt), do: ExecFork.new(@session_id) |> ExecFork.prompt(prompt)
++
++  defp report(stdout) do
++    [%JsonLineEvent{data: data}] = JsonLineEvent.parse_lines(stdout)
++    data
++  end
++
++  defp assert_stdin(data, prompt) do
++    assert List.last(data["argv"]) == "-"
++    assert data["stdin_bytes"] == byte_size(prompt)
++    assert data["stdin_sha256"] == digest(prompt)
++    assert data["stdin_mode"] == 0o600
++    assert data["stdin_links"] == 0
++  end
++
++  defp assert_argv(data, prompt) do
++    assert List.last(data["argv"]) == prompt
++    assert data["stdin_bytes"] == 0
++  end
++
++  defp large_prompt do
++    unit = "λ prompt 'quotes' $dollar `backticks`\n"
++    bytes = 2 * 1024 * 1024
++    binary_part(String.duplicate(unit, div(bytes, byte_size(unit)) + 1), 0, bytes)
++  end
++
++  defp digest(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
++end
+diff --git a/test/codex_wrapper/review_test.exs b/test/codex_wrapper/review_test.exs
+index 3df005c..b502ff8 100644
+--- a/test/codex_wrapper/review_test.exs
++++ b/test/codex_wrapper/review_test.exs
+@@ -134,7 +134,7 @@ defmodule CodexWrapper.ReviewTest do
+                "gpt-5",
+                "--json",
+                "--",
+-               "focus on correctness"
++               "-"
+              ]
+     end
+ 
+@@ -238,7 +238,7 @@ defmodule CodexWrapper.ReviewTest do
+         |> Review.prompt("the prompt")
+         |> Review.args()
+ 
+-      assert List.last(args) == "the prompt"
++      assert List.last(args) == "-"
+     end
+ 
+     test "no prompt appended when nil" do
+@@ -250,11 +250,11 @@ defmodule CodexWrapper.ReviewTest do
+       assert args == ["exec", "review", "--uncommitted"]
+     end
+ 
+-    test "leading-hyphen and stdin prompts are positional" do
+-      assert Review.new() |> Review.prompt("-x") |> Review.args() ==
++    test "argv mode preserves leading-hyphen and dash positionals" do
++      assert Review.new() |> Review.prompt("-x") |> Review.prompt_input(:argv) |> Review.args() ==
+                ["exec", "review", "--", "-x"]
+ 
+-      assert Review.new() |> Review.prompt("-") |> Review.args() ==
++      assert Review.new() |> Review.prompt("-") |> Review.prompt_input(:argv) |> Review.args() ==
+                ["exec", "review", "--", "-"]
+     end
+   end
+@@ -363,7 +363,7 @@ defmodule CodexWrapper.ReviewTest do
+         |> Review.ignore_rules()
+         |> Review.args()
+ 
+-      assert List.last(args) == "focus on correctness"
++      assert List.last(args) == "-"
+       assert "--strict-config" in args
+       assert "--ignore-rules" in args
+     end
+diff --git a/test/codex_wrapper/runner/forcola_prompt_launch_test.exs b/test/codex_wrapper/runner/forcola_prompt_launch_test.exs
+new file mode 100644
+index 0000000..de98ea4
+--- /dev/null
++++ b/test/codex_wrapper/runner/forcola_prompt_launch_test.exs
+@@ -0,0 +1,91 @@
++defmodule CodexWrapper.Runner.ForcolaPromptLaunchTest do
++  use ExUnit.Case, async: true
++
++  alias CodexWrapper.Runner.Forcola
++
++  @moduletag :forcola
++  @moduletag :tmp_dir
++
++  test "stdin launcher retains typed failures for missing and non-executable targets", context do
++    missing = Path.join(context.tmp_dir, "missing")
++    blocked = Path.join(context.tmp_dir, "blocked")
++    File.write!(blocked, "#!/bin/sh\nexit 0\n")
++    File.chmod!(blocked, 0o600)
++
++    for binary <- [missing, blocked] do
++      assert {:error, {:spawn, _}} = Forcola.run(binary, [], [stdin: "prompt"], 1_000)
++
++      assert [{:error, {:spawn, _}}] =
++               Forcola.stream_lines(binary, [], [stdin: "prompt"], 1_000) |> Enum.to_list()
++    end
++  end
++
++  test "a started target's exit 127 remains its exit status", context do
++    binary = executable(context, "failure", "exit 127")
++    assert {:ok, {"", 127}} = Forcola.run(binary, [], [stdin: "prompt"], 1_000)
++
++    assert [{:error, {:exit_status, 127}}] =
++             Forcola.stream_lines(binary, [], [stdin: "prompt"], 1_000) |> Enum.to_list()
++  end
++
++  test "relative targets and PATH entries resolve against the child working directory", context do
++    executable(context, "prompt-reader", "/bin/cat")
++
++    for {binary, env} <- [
++          {"./prompt-reader", []},
++          {"prompt-reader", [{"PATH", context.tmp_dir}]},
++          {"prompt-reader", [{"PATH", "."}]},
++          {"prompt-reader", [{"PATH", ""}]},
++          {"prompt-reader", [{"PATH", "/missing"}, {"PATH", "."}]}
++        ] do
++      opts = [stdin: "prompt\n", cd: context.tmp_dir, env: env]
++      assert {:ok, {"prompt\n", 0}} = Forcola.run(binary, [], opts, 1_000)
++      assert ["prompt"] = Forcola.stream_lines(binary, [], opts, 1_000) |> Enum.to_list()
++    end
++  end
++
++  test "replaced or unset PATH uses the system default search path", context do
++    executable(context, "prompt-reader", "/bin/cat")
++
++    for env <- [[{"PATH", false}], [{"PATH", nil}], [{"PATH", "/missing"}, {"PATH", false}]] do
++      opts = [stdin: "prompt\n", env: env]
++      assert {:ok, {"prompt\n", 0}} = Forcola.run("cat", [], opts, 1_000)
++      assert ["prompt"] = Forcola.stream_lines("cat", [], opts, 1_000) |> Enum.to_list()
++    end
++
++    assert {:ok, {"prompt\n", 0}} =
++             Forcola.run("cat", [], [stdin: "prompt\n", env_mode: :replace], 1_000)
++
++    assert {:ok, {"prompt\n", 0}} =
++             Forcola.run(
++               "prompt-reader",
++               [],
++               [stdin: "prompt\n", env_mode: :replace, env: [{"PATH", context.tmp_dir}]],
++               1_000
++             )
++
++    assert {:error, {:spawn, _}} =
++             Forcola.run("cat", [], [stdin: "prompt", env: [{"PATH", context.tmp_dir}]], 1_000)
++  end
++
++  test "relative executable lookup retains filesystem symlink traversal", context do
++    executable(context, "prompt-reader", "/bin/cat")
++    nested = Path.join(context.tmp_dir, "nested")
++    File.mkdir!(nested)
++    link = Path.join(nested, "link")
++    File.ln_s!(nested, link)
++    opts = [stdin: "prompt\n", cd: link]
++
++    assert {:ok, {"prompt\n", 0}} = Forcola.run("../prompt-reader", [], opts, 1_000)
++
++    assert ["prompt"] =
++             Forcola.stream_lines("../prompt-reader", [], opts, 1_000) |> Enum.to_list()
++  end
++
++  defp executable(context, name, body) do
++    path = Path.join(context.tmp_dir, name)
++    File.write!(path, "#!/bin/sh\n#{body}\n")
++    File.chmod!(path, 0o700)
++    path
++  end
++end
+diff --git a/test/codex_wrapper/stdin_file_test.exs b/test/codex_wrapper/stdin_file_test.exs
+new file mode 100644
+index 0000000..274a8f1
+--- /dev/null
++++ b/test/codex_wrapper/stdin_file_test.exs
+@@ -0,0 +1,149 @@
++defmodule CodexWrapper.StdinFileTest do
++  use ExUnit.Case, async: false
++
++  alias CodexWrapper.StdinFile
++
++  test "creates a 0600 prompt inside a 0700 directory and removes both after use" do
++    prompt = "private prompt\nλ\0"
++
++    path =
++      StdinFile.with_file([stdin: prompt], fn path ->
++        assert Bitwise.band(File.stat!(path).mode, 0o777) == 0o600
++        assert Bitwise.band(File.stat!(Path.dirname(path)).mode, 0o777) == 0o700
++        assert File.read!(path) == prompt
++        path
++      end)
++
++    assert_removed(path)
++  end
++
++  test "removes files when launch returns an error or raises" do
++    ref = make_ref()
++
++    assert {:error, :spawn} =
++             StdinFile.with_file([stdin: "private"], fn path ->
++               send(self(), {ref, path})
++               {:error, :spawn}
++             end)
++
++    assert_receive {^ref, path}
++    assert_removed(path)
++
++    assert_raise RuntimeError, "launch failed", fn ->
++      StdinFile.with_file([stdin: "private"], fn path ->
++        send(self(), {ref, path})
++        raise "launch failed"
++      end)
++    end
++
++    assert_receive {^ref, path}
++    assert_removed(path)
++  end
++
++  test "streams create input only when enumerated and can be enumerated again" do
++    ref = make_ref()
++
++    stream =
++      StdinFile.stream([stdin: "private"], fn path ->
++        send(self(), {ref, path})
++        [File.read!(path)]
++      end)
++
++    refute_received {^ref, _}
++
++    for _ <- 1..2 do
++      assert Enum.to_list(stream) == ["private"]
++      assert_receive {^ref, path}
++      assert_removed(path)
++    end
++  end
++
++  test "early stream halt closes the nested stream before removing input" do
++    ref = make_ref()
++
++    stream =
++      StdinFile.stream([stdin: "private"], fn path ->
++        Stream.resource(
++          fn -> path end,
++          fn path -> {[path], path} end,
++          fn path -> send(self(), {ref, path, File.exists?(path)}) end
++        )
++      end)
++
++    assert [path] = Enum.take(stream, 1)
++    assert_receive {^ref, ^path, true}
++    assert_removed(path)
++  end
++
++  test "stream cleanup handles errors during construction, initialization and consumption" do
++    ref = make_ref()
++
++    for stage <- [:construct, :initialize, :consume] do
++      stream =
++        StdinFile.stream([stdin: "private"], fn path ->
++          send(self(), {ref, path})
++          if stage == :construct, do: raise("stream failed")
++
++          Stream.resource(
++            fn ->
++              send(self(), {ref, :initialize})
++              if stage == :initialize, do: raise("stream failed")
++              path
++            end,
++            fn _path -> raise "stream failed" end,
++            fn _path -> send(self(), {ref, :closed}) end
++          )
++        end)
++
++      assert_raise RuntimeError, "stream failed", fn -> Enum.to_list(stream) end
++      assert_receive {^ref, path} when is_binary(path)
++      assert_removed(path)
++
++      if stage != :construct do
++        assert_receive {^ref, :initialize}
++        refute_received {^ref, :initialize}
++      end
++
++      if stage == :consume do
++        assert_receive {^ref, :closed}
++        refute_received {^ref, :closed}
++      end
++    end
++  end
++
++  for runner <- [CodexWrapper.Runner.Port, CodexWrapper.Runner.Forcola] do
++    @runner runner
++    if runner == CodexWrapper.Runner.Forcola, do: @tag(:forcola)
++
++    test "#{inspect(runner)} removes input after spawn failure" do
++      before = prompt_directories()
++
++      directory =
++        Path.join(System.tmp_dir!(), "missing-codex-dir-#{System.unique_integer([:positive])}")
++
++      opts = [stdin: "private", cd: directory]
++
++      assert launch_failed?(@runner.run("/bin/cat", [], opts, 1_000))
++      assert prompt_directories() == before
++      assert [error] = @runner.stream_lines("/bin/cat", [], opts, 1_000) |> Enum.to_list()
++      assert launch_failed?(error)
++      assert prompt_directories() == before
++    end
++  end
++
++  defp assert_removed(path) do
++    refute File.exists?(path)
++    refute File.exists?(Path.dirname(path))
++  end
++
++  # Depending on OTP, a failed Port chdir is surfaced as a spawn error or
++  # an exit status from the port helper. Both must release the prompt file.
++  defp launch_failed?({:error, {:spawn, _}}), do: true
++  defp launch_failed?({:error, {:exit_status, status}}), do: status != 0
++  defp launch_failed?({:ok, {"", status}}), do: status != 0
++  defp launch_failed?(_result), do: false
++
++  defp prompt_directories do
++    System.tmp_dir!() |> Path.join("codex-wrapper-stdin-*") |> Path.wildcard() |> Enum.sort()
++  end
++end
+diff --git a/test/codex_wrapper/stream_routing_test.exs b/test/codex_wrapper/stream_routing_test.exs
+index 0d784fe..0cdfc5e 100644
+--- a/test/codex_wrapper/stream_routing_test.exs
++++ b/test/codex_wrapper/stream_routing_test.exs
+@@ -50,10 +50,11 @@ defmodule CodexWrapper.StreamRoutingTest do
+     test "routes through the runner with --json forced" do
+       events = "hello" |> Exec.new() |> Exec.stream(config()) |> Enum.to_list()
+ 
+-      assert_received {:stream_lines, "codex", args, _opts, _timeout}
++      assert_received {:stream_lines, "codex", args, opts, _timeout}
+       assert "exec" in args
+       assert "--json" in args
+-      assert "hello" in args
++      assert List.last(args) == "-"
++      assert opts[:stdin] == "hello"
+ 
+       assert [%JsonLineEvent{event_type: "thread.started"}] = events
+     end
+diff --git a/test/fixtures/fake_codex_stdin b/test/fixtures/fake_codex_stdin
+new file mode 100755
+index 0000000..274206d
+--- /dev/null
++++ b/test/fixtures/fake_codex_stdin
+@@ -0,0 +1,47 @@
++#!/usr/bin/perl
++# Reports prompt transport without copying the prompt into output or argv.
++use strict;
++use warnings;
++use Digest::SHA qw(sha256_hex);
++use Encode qw(decode);
++use JSON::PP qw(encode_json);
++use Time::HiRes qw(time sleep);
++
++binmode STDIN;
++my @stdin_stat = stat(STDIN);
++my $input = do { local $/; <STDIN> };
++$input = '' unless defined $input;
++my $report = {
++    type => 'thread.started',
++    thread_id => '019b1e96-6935-7a02-a61e-325504b0b832',
++    argv => [map { decode('UTF-8', $_) } @ARGV],
++    stdin_bytes => length($input),
++    stdin_sha256 => sha256_hex($input),
++    stdin_mode => $stdin_stat[2] & 0777,
++    stdin_links => $stdin_stat[3],
++    pid => $$,
++};
++my $json = encode_json($report);
++my $directory = $ENV{STDIN_PROBE_DIR};
++
++sub record_signal {
++    my ($signal) = @_;
++    open(my $fh, '>>', "$directory/signals") or die "open signals: $!";
++    print $fh "$signal ", time(), "\n";
++    close($fh) or die "close signals: $!";
++}
++
++if (defined $directory) {
++    $SIG{INT} = sub { record_signal('INT') };
++    $SIG{TERM} = sub { record_signal('TERM') };
++    open(my $fh, '>', "$directory/ready.tmp") or die "open ready: $!";
++    print $fh $json;
++    close($fh) or die "close ready: $!";
++    rename("$directory/ready.tmp", "$directory/ready") or die "rename ready: $!";
++}
++
++$| = 1;
++print "$json\n" unless $ENV{STDIN_PROBE_QUIET};
++if (defined $directory) {
++    until (-e "$directory/release") { sleep(0.01) }
++}

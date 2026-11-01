@@ -1,0 +1,25 @@
+{
+  "implement": {
+    "status": "completed",
+    "duration_ms": 174447,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 776448,
+      "input_tokens": 815758,
+      "output_tokens": 7569,
+      "reasoning_output_tokens": 1183
+    }
+  },
+  "revise": {
+    "status": "completed",
+    "duration_ms": 19023,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 227328,
+      "input_tokens": 229318,
+      "output_tokens": 1054,
+      "reasoning_output_tokens": 0
+    }
+  },
+  "same_session_both_turns": true
+}

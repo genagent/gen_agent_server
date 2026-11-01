@@ -1,0 +1,44 @@
+{
+  "implement_1": {
+    "status": "failed",
+    "duration_ms": null,
+    "usage": null,
+    "error": {
+      "code": "timeout",
+      "message": "timeout"
+    }
+  },
+  "implement": {
+    "status": "completed",
+    "duration_ms": 1151543,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 11231360,
+      "input_tokens": 11369096,
+      "output_tokens": 26073,
+      "reasoning_output_tokens": 13179
+    },
+    "error": null
+  },
+  "review": {
+    "status": "completed",
+    "duration_ms": 223260,
+    "usage": {
+      "input_tokens": 26,
+      "output_tokens": 20027
+    },
+    "error": null
+  },
+  "revise": {
+    "status": "completed",
+    "duration_ms": 1071964,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 13729408,
+      "input_tokens": 13983950,
+      "output_tokens": 26814,
+      "reasoning_output_tokens": 15080
+    },
+    "error": null
+  }
+}
