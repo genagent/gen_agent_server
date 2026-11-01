@@ -186,6 +186,19 @@ bounds retained results after collection.
 
 ## Invocations, results, and cancellation
 
+Wait on an existing invocation with `GenAgentServer.result(instance, id, wait_ms: 60_000)`.
+`wait_ms` defaults to 0 and accepts integers from 0 to 600_000; invalid values
+return `{:error, :invalid_wait}`. Completion, failure, or cancellation wakes all
+waiters. Expiry returns `{:ok, :pending}` and leaves the invocation running.
+Other requests on the instance continue while callers wait.
+
+```sh
+mix gen_agent_server.ops result --id INVOCATION_ID --wait_ms 60000 --remote
+mix gen_agent_server.remote result INVOCATION_ID --wait 60000
+```
+
+Both remote commands allow the requested wait plus a 30 second RPC margin.
+
 `invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
 `{:ok, :pending}`, `{:ok, :completed, response}`, or
 `{:ok, :failed, reason}`. Completed results can be read repeatedly, including

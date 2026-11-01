@@ -71,6 +71,20 @@ defmodule GenAgentServer.RemoteTest do
     end
   end
 
+  test "result wait extends the remote CLI control timeout", %{dir: dir} do
+    release = script(dir, "waiting-result", "sleep 0.1\nprintf 'ready\\n'")
+    old = System.get_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS")
+    System.put_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", "1")
+
+    try do
+      for prefix <- [[], ["--instance", "work"]] do
+        assert {"ready\n", 0} = Remote.run(release, prefix ++ ["result", "id", "--wait", "100"])
+      end
+    after
+      restore_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", old)
+    end
+  end
+
   test "timeout terminates the RPC and its child process", %{dir: dir} do
     child_file = Path.join(dir, "child.pid")
 

@@ -224,6 +224,21 @@ defmodule GenAgentServer.SharedMCPTest do
     assert result == ok!(second, "result", args)
   end
 
+  test "result waits are capped at 5000 ms on the shared listener", c do
+    args = %{"instance" => c.name, "id" => "missing"}
+
+    for wait <- [-1, 5001, 600_000, "500", nil] do
+      error!(c.client, "result", Map.put(args, "wait_ms", wait))
+      assert {:ok, result} = Shared.run("result", Map.put(args, "wait_ms", wait), %{auth: c.auth})
+      assert inspect(result) =~ "result wait must be 0..5000 ms"
+    end
+
+    assert error!(c.client, "result", Map.put(args, "wait_ms", 5000)) =~ "not_found"
+    {:ok, listed} = Snodo.Client.list_tools(c.client)
+    tool = Enum.find(listed, &(&1["name"] == "result"))
+    assert tool["inputSchema"]["properties"]["wait_ms"]["maximum"] == 5000
+  end
+
   test "ask is bounded before admission and returns a repeatable pending ID", c do
     args = %{"instance" => c.name, "agent" => "blocked", "prompt" => "bounded"}
 

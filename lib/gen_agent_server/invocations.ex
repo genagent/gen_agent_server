@@ -17,7 +17,7 @@ defmodule GenAgentServer.Invocations do
           {:ok, :pending}
           | {:ok, :completed, GenAgent.Response.t()}
           | {:ok, :failed, term()}
-          | {:error, :not_found | :instance_not_found}
+          | {:error, :not_found | :instance_not_found | :invalid_wait | :invalid_options}
 
   def start_link(opts) do
     name = Keyword.fetch!(opts, :name)
@@ -33,7 +33,31 @@ defmodule GenAgentServer.Invocations do
   def describe(name), do: call_instance(name, :describe)
 
   @spec result(String.t(), String.t()) :: result()
-  def result(name, id), do: call_instance(name, {:result, id})
+  def result(name, id), do: result(name, id, [])
+
+  @spec result(String.t(), String.t(), keyword()) :: result()
+  def result(name, id, opts) do
+    cond do
+      not is_list(opts) ->
+        {:error, :invalid_options}
+
+      not Keyword.keyword?(opts) ->
+        {:error, :invalid_options}
+
+      Enum.any?(Keyword.keys(opts), &(&1 != :wait_ms)) ->
+        {:error, :invalid_options}
+
+      true ->
+        if Enum.all?(
+             Keyword.get_values(opts, :wait_ms),
+             &(is_integer(&1) and &1 >= 0 and &1 <= 600_000)
+           ) do
+          call_instance(name, {:result, id, Keyword.get(opts, :wait_ms, 0)})
+        else
+          {:error, :invalid_wait}
+        end
+    end
+  end
 
   def invocations(name, opts \\ []) do
     cond do
@@ -104,6 +128,7 @@ defmodule GenAgentServer.Invocations do
                description: Keyword.get(opts, :description),
                admission_sequence: 0,
                pending: %{},
+               waiters: %{},
                by_token: %{},
                completed: %{},
                completion_order: :queue.new(),
@@ -157,7 +182,10 @@ defmodule GenAgentServer.Invocations do
     end
   end
 
-  def handle_call({:result, id}, _from, state) do
+  # The control extension sends this two-element request directly.
+  def handle_call({:result, id}, from, state), do: handle_call({:result, id, 0}, from, state)
+
+  def handle_call({:result, id, wait_ms}, from, state) do
     case collect_available(state) do
       {:ok, state} ->
         result =
@@ -167,7 +195,22 @@ defmodule GenAgentServer.Invocations do
             true -> {:error, :not_found}
           end
 
-        {:reply, result, state}
+        if result == {:ok, :pending} and wait_ms > 0 do
+          ref = make_ref()
+          timer = Process.send_after(self(), {:wait_expired, id, ref}, wait_ms)
+
+          waiters =
+            Map.update(
+              state.waiters,
+              id,
+              %{ref => {from, timer}},
+              &Map.put(&1, ref, {from, timer})
+            )
+
+          {:noreply, schedule_poll(%{state | waiters: waiters})}
+        else
+          {:reply, result, state}
+        end
 
       {:error, reason} ->
         {:stop, {:inbox_failed, reason}, {:error, reason}, state}
@@ -343,6 +386,32 @@ defmodule GenAgentServer.Invocations do
     end
   end
 
+  def handle_info({:wait_expired, id, ref}, state) do
+    case collect_available(state) do
+      {:ok, state} -> expire_waiter(state, id, ref)
+      {:error, reason} -> {:stop, {:inbox_failed, reason}, state}
+    end
+  end
+
+  defp expire_waiter(state, id, ref) do
+    waiters = Map.get(state.waiters, id, %{})
+
+    case Map.pop(waiters, ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {{from, _timer}, remaining} ->
+        GenServer.reply(from, {:ok, :pending})
+
+        waiters =
+          if map_size(remaining) == 0,
+            do: Map.delete(state.waiters, id),
+            else: Map.put(state.waiters, id, remaining)
+
+        {:noreply, %{state | waiters: waiters}}
+    end
+  end
+
   defp collect_available(%{pending: pending} = state) when map_size(pending) == 0,
     do: {:ok, state}
 
@@ -409,7 +478,14 @@ defmodule GenAgentServer.Invocations do
         if is_pid(recipient),
           do: send(recipient, {:gen_agent_server, :completion, metadata, result})
 
-        evict_excess(state)
+        {waiters, remaining} = Map.pop(state.waiters, id, %{})
+
+        Enum.each(waiters, fn {_ref, {from, timer}} ->
+          Process.cancel_timer(timer)
+          GenServer.reply(from, result)
+        end)
+
+        evict_excess(%{state | waiters: remaining})
     end
   end
 

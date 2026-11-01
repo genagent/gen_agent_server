@@ -110,7 +110,9 @@ defmodule GenAgentServer.MCPTest do
     assert descriptions["stop_instance"] =~ "stored results are discarded"
   end
 
-  test "the original six tools keep their schemas", %{client: client} do
+  test "the original tools retain their fields and result accepts optional wait_ms", %{
+    client: client
+  } do
     {:ok, listed} = Snodo.Client.list_tools(client)
 
     for tool <- plain(listed), field(tool, "name", :name) in @legacy_tool_names do
@@ -118,6 +120,13 @@ defmodule GenAgentServer.MCPTest do
              |> Map.keys()
              |> Enum.sort() ==
                legacy_properties(field(tool, "name", :name))
+
+      if field(tool, "name", :name) == "result" do
+        schema = field(tool, "inputSchema", :input_schema)
+        assert schema["properties"]["wait_ms"]["type"] == "integer"
+        assert schema["properties"]["wait_ms"]["maximum"] == 600_000
+        refute "wait_ms" in schema["required"]
+      end
     end
   end
 
@@ -125,7 +134,7 @@ defmodule GenAgentServer.MCPTest do
   defp legacy_properties("status"), do: ["instance"]
   defp legacy_properties("instances"), do: []
   defp legacy_properties("invoke"), do: ["agent", "instance", "prompt"]
-  defp legacy_properties("result"), do: ["id", "instance"]
+  defp legacy_properties("result"), do: ["id", "instance", "wait_ms"]
   defp legacy_properties("ask"), do: ["agent", "instance", "prompt", "timeout_ms"]
 
   test "discovers instances and routes", %{client: client} do
@@ -142,7 +151,10 @@ defmodule GenAgentServer.MCPTest do
     assert %{"id" => id} = ok!(client, "invoke", %{"agent" => "echo", "prompt" => "later"})
 
     assert eventually(fn ->
-             match?(%{"status" => "completed"}, ok!(client, "result", %{"id" => id}))
+             match?(
+               %{"status" => "completed"},
+               ok!(client, "result", %{"id" => id, "wait_ms" => 1_000})
+             )
            end)
 
     first = ok!(client, "result", %{"id" => id})

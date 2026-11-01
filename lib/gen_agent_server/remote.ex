@@ -80,7 +80,17 @@ defmodule GenAgentServer.Remote do
   defp validate_timeout!(_value),
     do: raise(ArgumentError, "timeout_ms must be a positive integer")
 
-  defp timeout_for(["--instance", _instance, "ask" | _]), do: ask_timeout()
+  defp timeout_for(["--instance", _instance | args]), do: timeout_for(args)
+
+  defp timeout_for(["result", _id, "--wait", raw]) do
+    control = env_timeout("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", @control_timeout_ms)
+
+    case Integer.parse(raw) do
+      {wait, ""} when wait >= 0 and wait <= 600_000 -> max(control, wait + 30_000)
+      _ -> control
+    end
+  end
+
   defp timeout_for(["ask" | _]), do: ask_timeout()
   defp timeout_for(_args), do: env_timeout("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", @control_timeout_ms)
 

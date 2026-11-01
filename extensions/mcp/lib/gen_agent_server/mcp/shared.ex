@@ -66,6 +66,11 @@ defmodule GenAgentServer.MCP.Shared do
         args["instance"] not in instances ->
           {:error, %{code: "not_authorized", message: "Instance is not allowed"}}
 
+        name == "result" and
+            not (is_integer(Map.get(args, "wait_ms", 0)) and
+                     Map.get(args, "wait_ms", 0) in 0..5000) ->
+          {:error, %{code: "invalid_args", message: "result wait must be 0..5000 ms"}}
+
         name == "ask" ->
           ask(args)
 

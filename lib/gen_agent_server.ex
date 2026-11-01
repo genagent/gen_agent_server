@@ -151,8 +151,18 @@ defmodule GenAgentServer do
 
   def result(id) when is_binary(id), do: result(session_name(), id)
 
-  def result(instance, id) when is_binary(instance) and is_binary(id) do
-    GenAgentServer.Invocations.result(instance, id)
+  def result(instance, id) when is_binary(instance) and is_binary(id),
+    do: result(instance, id, [])
+
+  @doc """
+  Read an invocation result, optionally waiting up to `wait_ms` milliseconds.
+
+  The default is 0 (an immediate read); valid waits range from 0 to 600_000.
+  A wait that expires returns `{:ok, :pending}` without cancelling the invocation.
+  """
+  @spec result(String.t(), String.t(), keyword()) :: GenAgentServer.Invocations.result()
+  def result(instance, id, opts) when is_binary(instance) and is_binary(id) do
+    GenAgentServer.Invocations.result(instance, id, opts)
   end
 
   @doc """
