@@ -1,0 +1,32 @@
+{
+  "implement": {
+    "status": "completed",
+    "duration_ms": 160481,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 803200,
+      "input_tokens": 855096,
+      "output_tokens": 8274,
+      "reasoning_output_tokens": 911
+    }
+  },
+  "review": {
+    "status": "completed",
+    "duration_ms": 100986,
+    "usage": {
+      "input_tokens": 14,
+      "output_tokens": 8310
+    }
+  },
+  "revise": {
+    "status": "completed",
+    "duration_ms": 56050,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 506624,
+      "input_tokens": 520789,
+      "output_tokens": 3046,
+      "reasoning_output_tokens": 161
+    }
+  }
+}

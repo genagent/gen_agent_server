@@ -1,0 +1,676 @@
+diff --git a/README.md b/README.md
+index 7d12ec1..b5563fa 100644
+--- a/README.md
++++ b/README.md
+@@ -186,6 +186,19 @@ bounds retained results after collection.
+ 
+ ## Invocations, results, and cancellation
+ 
++Wait on an existing invocation with `GenAgentServer.result(instance, id, wait_ms: 60_000)`.
++`wait_ms` defaults to 0 and accepts integers from 0 to 600_000; invalid values
++return `{:error, :invalid_wait}`. Completion, failure, or cancellation wakes all
++waiters. Expiry returns `{:ok, :pending}` and leaves the invocation running.
++Other requests on the instance continue while callers wait.
++
++```sh
++mix gen_agent_server.ops result --id INVOCATION_ID --wait_ms 60000 --remote
++mix gen_agent_server.remote result INVOCATION_ID --wait 60000
++```
++
++Both remote commands allow the requested wait plus a 30 second RPC margin.
++
+ `invoke/2` returns an instance-scoped ID after Ensemble admits the turn. `result/1` returns
+ `{:ok, :pending}`, `{:ok, :completed, response}`, or
+ `{:ok, :failed, reason}`. Completed results can be read repeatedly, including
+diff --git a/extensions/mcp/lib/gen_agent_server/mcp/shared.ex b/extensions/mcp/lib/gen_agent_server/mcp/shared.ex
+index 0b9492d..0135068 100644
+--- a/extensions/mcp/lib/gen_agent_server/mcp/shared.ex
++++ b/extensions/mcp/lib/gen_agent_server/mcp/shared.ex
+@@ -66,6 +66,11 @@ defmodule GenAgentServer.MCP.Shared do
+         args["instance"] not in instances ->
+           {:error, %{code: "not_authorized", message: "Instance is not allowed"}}
+ 
++        name == "result" and
++            not (is_integer(Map.get(args, "wait_ms", 0)) and
++                     Map.get(args, "wait_ms", 0) in 0..5000) ->
++          {:error, %{code: "invalid_args", message: "result wait must be 0..5000 ms"}}
++
+         name == "ask" ->
+           ask(args)
+ 
+diff --git a/extensions/mcp/lib/gen_agent_server/mcp/shared/tools.ex b/extensions/mcp/lib/gen_agent_server/mcp/shared/tools.ex
+index f1145be..8600898 100644
+--- a/extensions/mcp/lib/gen_agent_server/mcp/shared/tools.ex
++++ b/extensions/mcp/lib/gen_agent_server/mcp/shared/tools.ex
+@@ -90,6 +90,11 @@ defmodule GenAgentServer.MCP.Shared.Tools do
+     schema =
+       put_in(schema, ["properties", "instance", "description"], "Explicit allowed instance name")
+ 
++    schema = put_in(schema, ["properties", "wait_ms", "maximum"], 5000)
++
++    schema =
++      put_in(schema, ["properties", "wait_ms", "description"], "Wait 0..5000 ms (default 0)")
++
+     input_schema(schema)
+ 
+     @impl true
+diff --git a/extensions/mcp/test/gen_agent_server_mcp_test.exs b/extensions/mcp/test/gen_agent_server_mcp_test.exs
+index 47c9699..9a7ea84 100644
+--- a/extensions/mcp/test/gen_agent_server_mcp_test.exs
++++ b/extensions/mcp/test/gen_agent_server_mcp_test.exs
+@@ -110,7 +110,9 @@ defmodule GenAgentServer.MCPTest do
+     assert descriptions["stop_instance"] =~ "stored results are discarded"
+   end
+ 
+-  test "the original six tools keep their schemas", %{client: client} do
++  test "the original tools retain their fields and result accepts optional wait_ms", %{
++    client: client
++  } do
+     {:ok, listed} = Snodo.Client.list_tools(client)
+ 
+     for tool <- plain(listed), field(tool, "name", :name) in @legacy_tool_names do
+@@ -118,6 +120,13 @@ defmodule GenAgentServer.MCPTest do
+              |> Map.keys()
+              |> Enum.sort() ==
+                legacy_properties(field(tool, "name", :name))
++
++      if field(tool, "name", :name) == "result" do
++        schema = field(tool, "inputSchema", :input_schema)
++        assert schema["properties"]["wait_ms"]["type"] == "integer"
++        assert schema["properties"]["wait_ms"]["maximum"] == 600_000
++        refute "wait_ms" in schema["required"]
++      end
+     end
+   end
+ 
+@@ -125,7 +134,7 @@ defmodule GenAgentServer.MCPTest do
+   defp legacy_properties("status"), do: ["instance"]
+   defp legacy_properties("instances"), do: []
+   defp legacy_properties("invoke"), do: ["agent", "instance", "prompt"]
+-  defp legacy_properties("result"), do: ["id", "instance"]
++  defp legacy_properties("result"), do: ["id", "instance", "wait_ms"]
+   defp legacy_properties("ask"), do: ["agent", "instance", "prompt", "timeout_ms"]
+ 
+   test "discovers instances and routes", %{client: client} do
+@@ -142,7 +151,10 @@ defmodule GenAgentServer.MCPTest do
+     assert %{"id" => id} = ok!(client, "invoke", %{"agent" => "echo", "prompt" => "later"})
+ 
+     assert eventually(fn ->
+-             match?(%{"status" => "completed"}, ok!(client, "result", %{"id" => id}))
++             match?(
++               %{"status" => "completed"},
++               ok!(client, "result", %{"id" => id, "wait_ms" => 1_000})
++             )
+            end)
+ 
+     first = ok!(client, "result", %{"id" => id})
+diff --git a/extensions/mcp/test/gen_agent_server_shared_mcp_test.exs b/extensions/mcp/test/gen_agent_server_shared_mcp_test.exs
+index a3b28b1..1f9a2cd 100644
+--- a/extensions/mcp/test/gen_agent_server_shared_mcp_test.exs
++++ b/extensions/mcp/test/gen_agent_server_shared_mcp_test.exs
+@@ -224,6 +224,21 @@ defmodule GenAgentServer.SharedMCPTest do
+     assert result == ok!(second, "result", args)
+   end
+ 
++  test "result waits are capped at 5000 ms on the shared listener", c do
++    args = %{"instance" => c.name, "id" => "missing"}
++
++    for wait <- [-1, 5001, 600_000, "500", nil] do
++      error!(c.client, "result", Map.put(args, "wait_ms", wait))
++      assert {:ok, result} = Shared.run("result", Map.put(args, "wait_ms", wait), %{auth: c.auth})
++      assert inspect(result) =~ "result wait must be 0..5000 ms"
++    end
++
++    assert error!(c.client, "result", Map.put(args, "wait_ms", 5000)) =~ "not_found"
++    {:ok, listed} = Snodo.Client.list_tools(c.client)
++    tool = Enum.find(listed, &(&1["name"] == "result"))
++    assert tool["inputSchema"]["properties"]["wait_ms"]["maximum"] == 5000
++  end
++
+   test "ask is bounded before admission and returns a repeatable pending ID", c do
+     args = %{"instance" => c.name, "agent" => "blocked", "prompt" => "bounded"}
+ 
+diff --git a/lib/gen_agent_server.ex b/lib/gen_agent_server.ex
+index 50d5a1d..fa9cb43 100644
+--- a/lib/gen_agent_server.ex
++++ b/lib/gen_agent_server.ex
+@@ -151,8 +151,18 @@ defmodule GenAgentServer do
+ 
+   def result(id) when is_binary(id), do: result(session_name(), id)
+ 
+-  def result(instance, id) when is_binary(instance) and is_binary(id) do
+-    GenAgentServer.Invocations.result(instance, id)
++  def result(instance, id) when is_binary(instance) and is_binary(id),
++    do: result(instance, id, [])
++
++  @doc """
++  Read an invocation result, optionally waiting up to `wait_ms` milliseconds.
++
++  The default is 0 (an immediate read); valid waits range from 0 to 600_000.
++  A wait that expires returns `{:ok, :pending}` without cancelling the invocation.
++  """
++  @spec result(String.t(), String.t(), keyword()) :: GenAgentServer.Invocations.result()
++  def result(instance, id, opts) when is_binary(instance) and is_binary(id) do
++    GenAgentServer.Invocations.result(instance, id, opts)
+   end
+ 
+   @doc """
+diff --git a/lib/gen_agent_server/cli.ex b/lib/gen_agent_server/cli.ex
+index 6150f61..148e8d7 100644
+--- a/lib/gen_agent_server/cli.ex
++++ b/lib/gen_agent_server/cli.ex
+@@ -43,7 +43,20 @@ defmodule GenAgentServer.CLI do
+   end
+ 
+   defp run_instance(instance, ["result", id], _source) do
+-    case GenAgentServer.result(instance, id) do
++    present_result(instance, id, 0)
++  end
++
++  defp run_instance(instance, ["result", id, "--wait", raw], _source) do
++    case Integer.parse(raw) do
++      {wait, ""} -> present_result(instance, id, wait)
++      _ -> {:error, :invalid_wait}
++    end
++  end
++
++  defp run_instance(_instance, _args, _source), do: {:error, :usage}
++
++  defp present_result(instance, id, wait_ms) do
++    case GenAgentServer.result(instance, id, wait_ms: wait_ms) do
+       {:ok, :pending} -> {:ok, "pending"}
+       {:ok, :completed, response} -> {:ok, presented_answer(response)}
+       {:ok, :failed, reason} -> {:error, reason}
+@@ -51,8 +64,6 @@ defmodule GenAgentServer.CLI do
+     end
+   end
+ 
+-  defp run_instance(_instance, _args, _source), do: {:error, :usage}
+-
+   def main(args, source \\ :local_cli) do
+     :ok = :io.setopts(:standard_io, encoding: :unicode)
+     :ok = :io.setopts(:standard_error, encoding: :unicode)
+@@ -87,8 +98,14 @@ defmodule GenAgentServer.CLI do
+ 
+   def error_message(args, :not_found) do
+     case command(args) do
+-      {["result", id], instance} -> "invocation #{id} not found in instance #{instance}"
+-      {_command, instance} -> "requested item not found in instance #{instance}"
++      {["result", id, "--wait", _], instance} ->
++        "invocation #{id} not found in instance #{instance}"
++
++      {["result", id], instance} ->
++        "invocation #{id} not found in instance #{instance}"
++
++      {_command, instance} ->
++        "requested item not found in instance #{instance}"
+     end
+   end
+ 
+@@ -102,12 +119,15 @@ defmodule GenAgentServer.CLI do
+     "instance #{instance} is busy"
+   end
+ 
++  def error_message(_args, :invalid_wait),
++    do: "--wait must be an integer from 0 to 600000"
++
+   # An extension command can return a message ready to print.
+   def error_message(_args, {:message, text}) when is_binary(text), do: text
+ 
+   def error_message(_args, :usage),
+     do:
+-      "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
++      "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID [--wait MS]"
+ 
+   def error_message(args, {:unknown_agent, name}) do
+     {_command, instance} = command(args)
+diff --git a/lib/gen_agent_server/invocations.ex b/lib/gen_agent_server/invocations.ex
+index 0e1b699..41296c6 100644
+--- a/lib/gen_agent_server/invocations.ex
++++ b/lib/gen_agent_server/invocations.ex
+@@ -17,7 +17,7 @@ defmodule GenAgentServer.Invocations do
+           {:ok, :pending}
+           | {:ok, :completed, GenAgent.Response.t()}
+           | {:ok, :failed, term()}
+-          | {:error, :not_found | :instance_not_found}
++          | {:error, :not_found | :instance_not_found | :invalid_wait | :invalid_options}
+ 
+   def start_link(opts) do
+     name = Keyword.fetch!(opts, :name)
+@@ -33,7 +33,31 @@ defmodule GenAgentServer.Invocations do
+   def describe(name), do: call_instance(name, :describe)
+ 
+   @spec result(String.t(), String.t()) :: result()
+-  def result(name, id), do: call_instance(name, {:result, id})
++  def result(name, id), do: result(name, id, [])
++
++  @spec result(String.t(), String.t(), keyword()) :: result()
++  def result(name, id, opts) do
++    cond do
++      not is_list(opts) ->
++        {:error, :invalid_options}
++
++      not Keyword.keyword?(opts) ->
++        {:error, :invalid_options}
++
++      Enum.any?(Keyword.keys(opts), &(&1 != :wait_ms)) ->
++        {:error, :invalid_options}
++
++      true ->
++        if Enum.all?(
++             Keyword.get_values(opts, :wait_ms),
++             &(is_integer(&1) and &1 >= 0 and &1 <= 600_000)
++           ) do
++          call_instance(name, {:result, id, Keyword.get(opts, :wait_ms, 0)})
++        else
++          {:error, :invalid_wait}
++        end
++    end
++  end
+ 
+   def invocations(name, opts \\ []) do
+     cond do
+@@ -104,6 +128,7 @@ defmodule GenAgentServer.Invocations do
+                description: Keyword.get(opts, :description),
+                admission_sequence: 0,
+                pending: %{},
++               waiters: %{},
+                by_token: %{},
+                completed: %{},
+                completion_order: :queue.new(),
+@@ -157,7 +182,10 @@ defmodule GenAgentServer.Invocations do
+     end
+   end
+ 
+-  def handle_call({:result, id}, _from, state) do
++  # The control extension sends this two-element request directly.
++  def handle_call({:result, id}, from, state), do: handle_call({:result, id, 0}, from, state)
++
++  def handle_call({:result, id, wait_ms}, from, state) do
+     case collect_available(state) do
+       {:ok, state} ->
+         result =
+@@ -167,7 +195,22 @@ defmodule GenAgentServer.Invocations do
+             true -> {:error, :not_found}
+           end
+ 
+-        {:reply, result, state}
++        if result == {:ok, :pending} and wait_ms > 0 do
++          ref = make_ref()
++          timer = Process.send_after(self(), {:wait_expired, id, ref}, wait_ms)
++
++          waiters =
++            Map.update(
++              state.waiters,
++              id,
++              %{ref => {from, timer}},
++              &Map.put(&1, ref, {from, timer})
++            )
++
++          {:noreply, schedule_poll(%{state | waiters: waiters})}
++        else
++          {:reply, result, state}
++        end
+ 
+       {:error, reason} ->
+         {:stop, {:inbox_failed, reason}, {:error, reason}, state}
+@@ -343,6 +386,32 @@ defmodule GenAgentServer.Invocations do
+     end
+   end
+ 
++  def handle_info({:wait_expired, id, ref}, state) do
++    case collect_available(state) do
++      {:ok, state} -> expire_waiter(state, id, ref)
++      {:error, reason} -> {:stop, {:inbox_failed, reason}, state}
++    end
++  end
++
++  defp expire_waiter(state, id, ref) do
++    waiters = Map.get(state.waiters, id, %{})
++
++    case Map.pop(waiters, ref) do
++      {nil, _} ->
++        {:noreply, state}
++
++      {{from, _timer}, remaining} ->
++        GenServer.reply(from, {:ok, :pending})
++
++        waiters =
++          if map_size(remaining) == 0,
++            do: Map.delete(state.waiters, id),
++            else: Map.put(state.waiters, id, remaining)
++
++        {:noreply, %{state | waiters: waiters}}
++    end
++  end
++
+   defp collect_available(%{pending: pending} = state) when map_size(pending) == 0,
+     do: {:ok, state}
+ 
+@@ -409,7 +478,14 @@ defmodule GenAgentServer.Invocations do
+         if is_pid(recipient),
+           do: send(recipient, {:gen_agent_server, :completion, metadata, result})
+ 
+-        evict_excess(state)
++        {waiters, remaining} = Map.pop(state.waiters, id, %{})
++
++        Enum.each(waiters, fn {_ref, {from, timer}} ->
++          Process.cancel_timer(timer)
++          GenServer.reply(from, result)
++        end)
++
++        evict_excess(%{state | waiters: remaining})
+     end
+   end
+ 
+diff --git a/lib/gen_agent_server/ops.ex b/lib/gen_agent_server/ops.ex
+index 381c9ac..10a6d19 100644
+--- a/lib/gen_agent_server/ops.ex
++++ b/lib/gen_agent_server/ops.ex
+@@ -116,8 +116,22 @@ defmodule GenAgentServer.Ops do
+         "result",
+         "Read an invocation result. Repeatable until evicted.",
+         false,
+-        [instance(), req("id", :string, "Invocation ID")],
+-        fn a -> result_data(a["id"], GenAgentServer.result(a["instance"], a["id"])) end
++        [
++          instance(),
++          req("id", :string, "Invocation ID"),
++          opt(
++            "wait_ms",
++            :integer,
++            "Wait for a terminal result, 0 to 600000 milliseconds (default 0)"
++          )
++          |> Map.put(:schema, %{"minimum" => 0, "maximum" => 600_000})
++        ],
++        fn a ->
++          result_data(
++            a["id"],
++            GenAgentServer.result(a["instance"], a["id"], wait_ms: Map.get(a, "wait_ms", 0))
++          )
++        end
+       ),
+       op(
+         "ask",
+diff --git a/lib/gen_agent_server/remote.ex b/lib/gen_agent_server/remote.ex
+index 84df759..2a0955e 100644
+--- a/lib/gen_agent_server/remote.ex
++++ b/lib/gen_agent_server/remote.ex
+@@ -80,7 +80,17 @@ defmodule GenAgentServer.Remote do
+   defp validate_timeout!(_value),
+     do: raise(ArgumentError, "timeout_ms must be a positive integer")
+ 
+-  defp timeout_for(["--instance", _instance, "ask" | _]), do: ask_timeout()
++  defp timeout_for(["--instance", _instance | args]), do: timeout_for(args)
++
++  defp timeout_for(["result", _id, "--wait", raw]) do
++    control = env_timeout("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", @control_timeout_ms)
++
++    case Integer.parse(raw) do
++      {wait, ""} when wait >= 0 and wait <= 600_000 -> max(control, wait + 30_000)
++      _ -> control
++    end
++  end
++
+   defp timeout_for(["ask" | _]), do: ask_timeout()
+   defp timeout_for(_args), do: env_timeout("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", @control_timeout_ms)
+ 
+diff --git a/lib/mix/tasks/gen_agent_server.ops.ex b/lib/mix/tasks/gen_agent_server.ops.ex
+index e48445b..ec6f2d6 100644
+--- a/lib/mix/tasks/gen_agent_server.ops.ex
++++ b/lib/mix/tasks/gen_agent_server.ops.ex
+@@ -137,8 +137,13 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
+     end
+   end
+ 
+-  # Waiting operations (those that take `timeout_ms`, such as ask) get the long
+-  # ask timeout; the rest the control timeout.
++  defp rpc_timeout(%{name: "result"}, args) do
++    case args["wait_ms"] do
++      wait when is_integer(wait) and wait >= 0 and wait <= 600_000 -> wait + 30_000
++      _ -> 30_000
++    end
++  end
++
+   defp rpc_timeout(op, args) do
+     if Enum.any?(op.params, &(&1.name == "timeout_ms")),
+       do: (args["timeout_ms"] || 3_600_000) + 30_000,
+diff --git a/lib/mix/tasks/gen_agent_server.remote.ex b/lib/mix/tasks/gen_agent_server.remote.ex
+index 5953815..e760beb 100644
+--- a/lib/mix/tasks/gen_agent_server.remote.ex
++++ b/lib/mix/tasks/gen_agent_server.remote.ex
+@@ -9,7 +9,7 @@ defmodule Mix.Tasks.GenAgentServer.Remote do
+ 
+     if args == [] do
+       Mix.raise(
+-        "usage: mix gen_agent_server.remote instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID | --instance NAME cancel ID"
++        "usage: mix gen_agent_server.remote instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID [--wait MS] | --instance NAME cancel ID"
+       )
+     end
+ 
+diff --git a/test/gen_agent_server_cancellation_test.exs b/test/gen_agent_server_cancellation_test.exs
+index 40b2c2d..42691e4 100644
+--- a/test/gen_agent_server_cancellation_test.exs
++++ b/test/gen_agent_server_cancellation_test.exs
+@@ -101,13 +101,130 @@ defmodule GenAgentServerCancellationTest do
+          strategy: EnsembleFixture,
+          max_in_flight: Keyword.get(opts, :max_in_flight, 4),
+          max_results: Keyword.get(opts, :max_results, 10),
+-         poll_interval_ms: 60_000},
++         poll_interval_ms: Keyword.get(opts, :poll_interval_ms, 60_000)},
+         id: {name, :owner}
+       )
+ 
+     {name, ensemble, owner}
+   end
+ 
++  test "result waiters receive every terminal outcome through polling" do
++    for outcome <- [{:ok, :done}, {:error, :failure}, {:error, :cancelled}] do
++      {name, ensemble, owner} = fixture(poll_interval_ms: 5)
++      {id, token, _} = invoke(name)
++
++      tasks =
++        for _ <- 1..2, do: Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 1_000) end)
++
++      await_waiters(owner, id, 2)
++      assert :ok = GenServer.call(ensemble, {:entries, [{token, outcome}]})
++
++      expected =
++        case outcome do
++          {:ok, value} -> {:ok, :completed, value}
++          {:error, reason} -> {:ok, :failed, reason}
++        end
++
++      for task <- tasks, do: assert(Task.await(task) == expected)
++      assert GenAgentServer.result(name, id, wait_ms: 600_000) == expected
++      assert :sys.get_state(owner).waiters == %{}
++    end
++  end
++
++  test "cancel serves its caller and wakes an existing result waiter" do
++    {name, _ensemble, owner} = fixture()
++    {id, _, _} = invoke(name)
++    task = Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 1_000) end)
++    await_waiters(owner, id, 1)
++    assert {:ok, :cancelled} = GenAgentServer.cancel(name, id)
++    assert {:ok, :failed, :cancelled} = Task.await(task)
++    assert :sys.get_state(owner).waiters == %{}
++  end
++
++  test "waiting leaves other calls free and expires without cancelling" do
++    {name, _ensemble, owner} = fixture()
++    {id, _, _} = invoke(name)
++    started = System.monotonic_time(:millisecond)
++    task = Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 200) end)
++    await_waiters(owner, id, 1)
++    assert {:ok, :pending} = GenAgentServer.result(name, id)
++    assert {:ok, :pending} = GenAgentServer.result(name, id, wait_ms: 0)
++    assert {:ok, [_]} = GenAgentServer.invocations(name)
++    {_other, _, _} = invoke(name)
++    assert Task.yield(task, 0) == nil
++    assert {:ok, :pending} = Task.await(task)
++    assert System.monotonic_time(:millisecond) - started >= 200
++    assert :sys.get_state(owner).waiters == %{}
++    assert {:ok, :pending} = GenAgentServer.result(name, id)
++  end
++
++  test "wait validation precedes lookup and CLI and ops accept waiting" do
++    for wait <- [-1, 600_001, 1.0, nil, "10", false] do
++      assert {:error, :invalid_wait} = GenAgentServer.result("missing", "missing", wait_ms: wait)
++    end
++
++    {name, _ensemble, _owner} = fixture()
++    {id, _, _} = invoke(name)
++    assert {:error, :not_found} = GenAgentServer.result(name, "missing", wait_ms: 600_000)
++
++    assert {:ok, "pending"} =
++             GenAgentServer.CLI.run(["--instance", name, "result", id, "--wait", "1"])
++
++    assert {:error, :invalid_wait} = GenAgentServer.CLI.run(["result", id, "--wait", "bad"])
++    assert {:error, :invalid_wait} = GenAgentServer.CLI.run(["result", id, "--wait", "600001"])
++
++    assert {:ok, %{status: "pending"}} =
++             GenAgentServer.Ops.call("result", %{"instance" => name, "id" => id, "wait_ms" => 1})
++  end
++
++  test "result rejects malformed options before looking up an instance" do
++    for opts <- [
++          %{},
++          nil,
++          :wait,
++          [:wait_ms],
++          [{"wait_ms", 1}],
++          [other: 1],
++          [wait_ms: 1, other: 2]
++        ] do
++      assert {:error, :invalid_options} = GenAgentServer.result("missing", "missing", opts)
++    end
++  end
++
++  test "wait expiry collects a completion before reporting pending" do
++    {name, ensemble, owner} = fixture()
++    {id, token, _} = invoke(name)
++    task = Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 100) end)
++    await_waiters(owner, id, 1)
++    assert :ok = GenServer.call(ensemble, {:entries, [{token, {:ok, :finished}}]})
++    assert {:ok, :completed, :finished} = Task.await(task)
++    assert :sys.get_state(owner).waiters == %{}
++  end
++
++  test "CLI wait errors name the option and missing invocation" do
++    alias GenAgentServer.CLI
++    assert CLI.error_message([], :usage) =~ "result ID [--wait MS]"
++    assert CLI.error_message([], :invalid_wait) == "--wait must be an integer from 0 to 600000"
++
++    assert CLI.error_message(
++             ["--instance", "review", "result", "absent", "--wait", "10"],
++             :not_found
++           ) ==
++             "invocation absent not found in instance review"
++  end
++
++  defp await_waiters(owner, id, count, attempts \\ 100)
++  defp await_waiters(_owner, _id, _count, 0), do: flunk("waiters were not registered")
++
++  defp await_waiters(owner, id, count, attempts) do
++    if map_size(Map.get(:sys.get_state(owner).waiters, id, %{})) == count do
++      :ok
++    else
++      Process.sleep(1)
++      await_waiters(owner, id, count, attempts - 1)
++    end
++  end
++
+   defp invoke(name, opts \\ []) do
+     assert {:ok, id} = GenAgentServer.invoke(name, "worker", "secret", opts)
+     assert_receive {:tell, token, "secret", forwarded}
+diff --git a/test/gen_agent_server_remote_test.exs b/test/gen_agent_server_remote_test.exs
+index cb16faf..0c50aa6 100644
+--- a/test/gen_agent_server_remote_test.exs
++++ b/test/gen_agent_server_remote_test.exs
+@@ -71,6 +71,20 @@ defmodule GenAgentServer.RemoteTest do
+     end
+   end
+ 
++  test "result wait extends the remote CLI control timeout", %{dir: dir} do
++    release = script(dir, "waiting-result", "sleep 0.1\nprintf 'ready\\n'")
++    old = System.get_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS")
++    System.put_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", "1")
++
++    try do
++      for prefix <- [[], ["--instance", "work"]] do
++        assert {"ready\n", 0} = Remote.run(release, prefix ++ ["result", "id", "--wait", "100"])
++      end
++    after
++      restore_env("GEN_AGENT_SERVER_RPC_TIMEOUT_MS", old)
++    end
++  end
++
+   test "timeout terminates the RPC and its child process", %{dir: dir} do
+     child_file = Path.join(dir, "child.pid")
+ 
+diff --git a/test/gen_agent_server_result_rpc_test.exs b/test/gen_agent_server_result_rpc_test.exs
+new file mode 100644
+index 0000000..0c3ec13
+--- /dev/null
++++ b/test/gen_agent_server_result_rpc_test.exs
+@@ -0,0 +1,59 @@
++defmodule GenAgentServer.ResultRPCTest do
++  use ExUnit.Case, async: false
++
++  import ExUnit.CaptureIO
++
++  test "remote ops forwards a wait plus the RPC margin" do
++    release = Path.join(System.tmp_dir!(), "result-rpc-#{System.unique_integer([:positive])}")
++
++    File.write!(
++      release,
++      "#!/bin/sh\nprintf '{\"ok\":true,\"data\":{\"status\":\"pending\"}}\\n'\n"
++    )
++
++    File.chmod!(release, 0o755)
++    old = System.get_env("GEN_AGENT_SERVER_RELEASE_BIN")
++    System.put_env("GEN_AGENT_SERVER_RELEASE_BIN", release)
++
++    on_exit(fn ->
++      File.rm!(release)
++
++      if old,
++        do: System.put_env("GEN_AGENT_SERVER_RELEASE_BIN", old),
++        else: System.delete_env("GEN_AGENT_SERVER_RELEASE_BIN")
++    end)
++
++    Code.ensure_loaded!(GenAgentServer.Ops.Remote)
++    :erlang.trace_pattern({GenAgentServer.Ops.Remote, :call, 4}, true, [])
++
++    try do
++      for {flags, expected} <- [
++            {[], 30_000},
++            {["--wait_ms", "600000"], 630_000},
++            {["--wait-ms", "10"], 30_010}
++          ] do
++        task =
++          Task.async(fn ->
++            receive do
++              :go ->
++                capture_io(fn ->
++                  Mix.Tasks.GenAgentServer.Ops.run(["result", "--id", "id", "--remote"] ++ flags)
++                end)
++            end
++          end)
++
++        :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
++        send(task.pid, :go)
++
++        assert_receive {:trace, _, :call,
++                        {GenAgentServer.Ops.Remote, :call,
++                         [^release, "result", _args, [timeout_ms: ^expected]]}},
++                       1_000
++
++        assert Task.await(task) =~ "pending"
++      end
++    after
++      :erlang.trace_pattern({GenAgentServer.Ops.Remote, :call, 4}, false, [])
++    end
++  end
++end

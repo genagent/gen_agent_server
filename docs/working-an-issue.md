@@ -173,3 +173,7 @@ to this procedure, a server or core fix, or an optional helper.
 | codex_wrapper #153 | 7 | No network in the sandbox; the native probe in the acceptance list could not run, and the agent recorded the blocked attempt. | Procedure: native probes are the operator's (steps 6 and 8). |
 | codex_wrapper #153 | 7 | The result has no model name and no list of changed files. | Candidate server fix: model in the result. Changed files come from `git status`. |
 | codex_wrapper #153 | 9 | The revision turn reused the implementation session and took 19 s. | None; works as intended. |
+| [server #135](runs/2026-11-01-server-result-wait-135/README.md) | 3 | gen_agent_server extensions are separate Mix projects; dependencies for seven of them had to be fetched before the sandboxed run. | Procedure: step 3 covers every Mix project in the repository. |
+| server #135 | 8 | A Claude read-only review found three defects the operator had missed, and made one false claim (dead code that a test still calls). | Procedure: a review route before host checks; the operator checks claims before forwarding. |
+| server #135 | 8 | The read-only Claude route cannot run `git diff`, so the diff went into the prompt. | None at 22 KB. |
+| server #135 | 10 | One CI failure was an existing race in a control extension test helper, unrelated to the change. | Rerun; separate fix. |

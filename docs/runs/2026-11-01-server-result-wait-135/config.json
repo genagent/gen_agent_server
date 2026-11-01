@@ -1,0 +1,4 @@
+[
+  {"instance": "gen_agent_server-135", "config": {"cwd": "<worktree>/gen_agent_server-135", "routes": [{"name": "impl", "provider": "codex", "codex_sandbox": "workspace_write"}]}},
+  {"instance": "gen_agent_server-135-review", "config": {"cwd": "<worktree>/gen_agent_server-135", "routes": [{"name": "review", "provider": "claude", "claude_permission_mode": "read_only"}]}}
+]
