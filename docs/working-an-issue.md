@@ -183,3 +183,7 @@ to this procedure, a server or core fix, or an optional helper.
 | [server #137](runs/2026-11-01-server-inherit-access-137/README.md) | 8 | Host checks skipped the MCP release smoke that CI runs; CI failed on an outdated assertion. | Helper: same as above; second run in a row. |
 | server #137 | 11 | An agent drafted the run records for runs 3 and 4 from artifacts and operator notes; the operator added one event the notes predated and two scorecard cells. | Procedure: agent draft, operator check. |
 | server #137 | 7 | With inheritance, a Codex route with no access options and a Claude `auto` route both ran a networked command. | Next run hands a whole issue to one inherited session. |
+| [codex_wrapper #154](runs/2026-11-01-codex-wrapper-prompt-stdin-154/README.md) | 7 | GenAgent's default 10-minute `watchdog_ms` ended a whole-issue turn; the server does not expose it. | Server fix: turn limit opt-in per route or call, default none. |
+| codex_wrapper #154 | 3 to 10 | One inherited session did the worktree, draft PR, implementation, local CI matrix (Linux in Docker, three CLI versions), commits, push, CI and ready, from one prompt with the owner's rules. | Procedure: steps 3, 4 and 8 to 10 move to the session. |
+| codex_wrapper #154 | 8 | An independent read-only review found seven defects after the session's self-review. | Procedure: keep an independent review before merge. |
+| codex_wrapper #154 | 11 | The session left Docker containers and images until asked to remove them. | Procedure: the prompt asks for cleanup of what the session creates. |
