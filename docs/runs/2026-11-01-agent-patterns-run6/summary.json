@@ -1,0 +1,132 @@
+[
+  {
+    "pattern": "single-use",
+    "session": "single-156",
+    "step": "implement",
+    "prompt": "p-156.txt",
+    "status": "completed",
+    "duration_s": 1004,
+    "cost_usd": null,
+    "invocation": "single-156/1"
+  },
+  {
+    "pattern": "counterpart",
+    "session": "counterpart-codex-wrapper",
+    "step": "implement",
+    "prompt": "p-150.txt",
+    "status": "completed",
+    "duration_s": 994,
+    "cost_usd": null,
+    "invocation": "counterpart-codex-wrapper/1"
+  },
+  {
+    "pattern": "recursive",
+    "session": "recursive-315",
+    "step": "implement and self-started review",
+    "prompt": "p-315.txt",
+    "status": "completed",
+    "duration_s": 2539,
+    "cost_usd": 5.95,
+    "invocation": "recursive-315/1"
+  },
+  {
+    "pattern": "review",
+    "session": "review-170",
+    "step": "independent review of #170",
+    "prompt": "review-170-prompt.txt",
+    "status": "completed",
+    "duration_s": 164,
+    "cost_usd": 2.07,
+    "invocation": "review-170/1"
+  },
+  {
+    "pattern": "review",
+    "session": "review-171",
+    "step": "independent review of #171",
+    "prompt": "review-171-prompt.txt",
+    "status": "completed",
+    "duration_s": 128,
+    "cost_usd": 2.05,
+    "invocation": "review-171/1"
+  },
+  {
+    "pattern": "counterpart",
+    "session": "counterpart-codex-wrapper",
+    "step": "cross-review of #170",
+    "prompt": "cross-170.txt",
+    "status": "completed",
+    "duration_s": 292,
+    "cost_usd": null,
+    "invocation": "counterpart-codex-wrapper/2"
+  },
+  {
+    "pattern": "single-use",
+    "session": "single-170-revise",
+    "step": "revise #170 (found merged)",
+    "prompt": "revise-170.txt",
+    "status": "completed",
+    "duration_s": 434,
+    "cost_usd": null,
+    "invocation": "single-170-revise/1"
+  },
+  {
+    "pattern": "counterpart",
+    "session": "counterpart-codex-wrapper",
+    "step": "revise #171 (found merged, opened #173)",
+    "prompt": "revise-171.txt",
+    "status": "completed",
+    "duration_s": 1037,
+    "cost_usd": null,
+    "invocation": "counterpart-codex-wrapper/3"
+  },
+  {
+    "pattern": "single-use",
+    "session": "single-170-revise",
+    "step": "follow-up PR #174",
+    "prompt": "revise-170-2.txt",
+    "status": "completed",
+    "duration_s": 637,
+    "cost_usd": null,
+    "invocation": "single-170-revise/2"
+  },
+  {
+    "pattern": "single-use",
+    "session": "single-170-revise",
+    "step": "declare breaking (failed, cwd removed)",
+    "prompt": "revise-170-3.txt",
+    "status": "failed",
+    "duration_s": 0,
+    "cost_usd": null,
+    "invocation": "single-170-revise/3"
+  },
+  {
+    "pattern": "single-use",
+    "session": "single-174-footer",
+    "step": "declare breaking on #174",
+    "prompt": "revise-174.txt",
+    "status": "completed",
+    "duration_s": 379,
+    "cost_usd": null,
+    "invocation": "single-174-footer/1"
+  },
+  {
+    "pattern": "review",
+    "session": "review-351",
+    "step": "independent review of #351",
+    "prompt": "review-351-prompt.txt",
+    "status": "completed",
+    "duration_s": 164,
+    "cost_usd": 1.85,
+    "invocation": "review-351/1"
+  },
+  {
+    "pattern": "recursive",
+    "session": "recursive-315",
+    "step": "revise #351 and self-started confirm review",
+    "prompt": "revise-351.txt",
+    "status": "completed",
+    "duration_s": 1228,
+    "cost_usd": 8.43,
+    "invocation": "recursive-315/2"
+  }
+]
