@@ -1,0 +1,54 @@
+{
+  "triage": {
+    "status": "completed",
+    "duration_ms": 78467,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 175104,
+      "input_tokens": 215293,
+      "output_tokens": 4038,
+      "reasoning_output_tokens": 112
+    }
+  },
+  "implement": {
+    "status": "completed",
+    "duration_ms": 163028,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 964608,
+      "input_tokens": 1003376,
+      "output_tokens": 9804,
+      "reasoning_output_tokens": 591
+    }
+  },
+  "review": {
+    "status": "completed",
+    "duration_ms": 165776,
+    "usage": {
+      "input_tokens": 36,
+      "output_tokens": 12598
+    }
+  },
+  "revise": {
+    "status": "completed",
+    "duration_ms": 123374,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 1112448,
+      "input_tokens": 1137468,
+      "output_tokens": 7354,
+      "reasoning_output_tokens": 891
+    }
+  },
+  "revise2": {
+    "status": "completed",
+    "duration_ms": 13096,
+    "usage": {
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 260608,
+      "input_tokens": 264361,
+      "output_tokens": 418,
+      "reasoning_output_tokens": 0
+    }
+  }
+}

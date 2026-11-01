@@ -177,3 +177,9 @@ to this procedure, a server or core fix, or an optional helper.
 | server #135 | 8 | A Claude read-only review found three defects the operator had missed, and made one false claim (dead code that a test still calls). | Procedure: a review route before host checks; the operator checks claims before forwarding. |
 | server #135 | 8 | The read-only Claude route cannot run `git diff`, so the diff went into the prompt. | None at 22 KB. |
 | server #135 | 10 | One CI failure was an existing race in a control extension test helper, unrelated to the change. | Rerun; separate fix. |
+| [claude_wrapper #328](runs/2026-11-01-claude-wrapper-print-flags-328/README.md) | 6 | A read-only triage turn wrote the PR plan and the implementation prompt; the operator used both unedited. | Procedure: triage before implementation. |
+| claude_wrapper #328 | 7 | A Claude `accept_edits` route edits files but cannot run Bash headless; 848 lines arrived without a compile or test run. | Server fix: #137 (inherit by default). |
+| claude_wrapper #328 | 8 | Host checks ran the contract against the installed CLI only; CI also pins 2.1.220, which failed. | Helper: run the gates the CI workflow defines. |
+| [server #137](runs/2026-11-01-server-inherit-access-137/README.md) | 8 | Host checks skipped the MCP release smoke that CI runs; CI failed on an outdated assertion. | Helper: same as above; second run in a row. |
+| server #137 | 11 | An agent drafted the run records for runs 3 and 4 from artifacts and operator notes; the operator added one event the notes predated and two scorecard cells. | Procedure: agent draft, operator check. |
+| server #137 | 7 | With inheritance, a Codex route with no access options and a Claude `auto` route both ran a networked command. | Next run hands a whole issue to one inherited session. |
