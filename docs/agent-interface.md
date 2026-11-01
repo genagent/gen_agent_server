@@ -47,27 +47,39 @@ session. Routes default to inherited access (#137).
 
 ## Proposed `agent` operation
 
+Status: implemented as a spike over the wrappers in #140 and used from run 6.
+
 ```
 agent(
   prompt,               # required
-  session_id?,          # continue this session; omitted: create one
-  name?,                # label for a new session
-  cwd?,                 # new session's working directory
-  provider?,            # claude | codex (server default otherwise)
+  session_id?,          # continue this session; omitted: start one
+  name?,                # id for a new session (default: generated)
+  cwd?,                 # required to start a session
+  provider?,            # claude | codex (default codex)
   model?, effort?,
   access?,              # omitted: inherit; or a narrowing value
-  timeout_ms?,          # turn limit; omitted: none
   wait_ms?              # block up to this long for the result
-) -> {session_id, invocation_id, status, text?, usage?}
+) -> {session_id, invocation_id, status, text?, usage?, provider_session_id?, duration_ms?}
+
+agent_result(session_id, invocation_id?, wait_ms?)   # latest invocation when omitted
+agent_cancel(session_id)                             # running turn and queued prompts
+agent_stop(session_id)
+agent_sessions()
 ```
 
-- A new `session_id` is an instance with one route, created on the first
-  call. Later calls with that `session_id` are turns on the same backend
-  session.
+- A new session is one process holding the provider's resume id. Later calls
+  with its `session_id` are turns on the same provider session.
+- A prompt sent during a turn queues behind it, so a caller can send a
+  follow-up without waiting.
+- `name`, `cwd`, `provider`, `model`, `effort` and `access` apply only when
+  starting a session; passing them with `session_id` is an error rather than
+  a silent ignore.
+- Invocation ids are `<session_id>/<n>`. `agent_result` without one reads the
+  latest, which is how a caller checks on a session it handed work to.
 - With `wait_ms`, the call returns the terminal result if the turn ends
-  within it. Without it, or on expiry, it returns `pending` and the caller
-  checks with `result(invocation_id, wait_ms)`.
-- `cancel(invocation_id)` stops a turn; `stop(session_id)` ends the session.
+  within it; otherwise `pending`.
+- No turn limit. The earlier `timeout_ms` parameter is dropped: the caller
+  bounds its own wait with `wait_ms` and stops a turn with `agent_cancel`.
 - It is an Ops operation, so the Mix task, release RPC and MCP get it from
   the same definition.
 
@@ -97,9 +109,71 @@ agent(
 | 4 (server #137) | Inherited access by default; a live probe reached the network. |
 | 5 (codex_wrapper #154) | One long-lived session per repository, handed a whole issue in one prompt. The 10-minute GenAgent watchdog stopped the first turn after it had pushed and opened a draft PR. With `watchdog_ms: :infinity` (set through `:provider_overrides`), the continuation finished the issue in 19 minutes, CI green. An independent review's findings went back to the same session (same backend session id), which fixed them in 18 minutes. The operator's part was the issue choice, one prompt, the review and verification. |
 
+## How much GenAgent it needs
+
+Traced for #140. The path the procedure runs used:
+
+```
+invoke -> Invocations (polls the Ensemble inbox every 100 ms)
+       -> GenAgentEnsemble.tell -> GenAgentEnsemble.Server (2322 lines)
+       -> Switchboard -> GenAgent.Server (2413 lines) running Agents.Simple (no-op callbacks)
+       -> backend adapter (Codex 466 + 352 lines, Claude 364 + 359)
+       -> wrapper
+```
+
+The spike path:
+
+```
+agent -> GenAgentServer.Session (one GenServer per session) -> wrapper Session.send/3 in a task
+```
+
+What each layer did for runs 1 to 5:
+
+| Layer | Used | Not used |
+| --- | --- | --- |
+| Ensemble | name-to-route lookup, inbox | strategies other than Switchboard, fan-out, debate, pipeline |
+| GenAgent.Server | one turn at a time, resume id kept in the session, prompt task, watchdog (harmful default) | callbacks, self-chaining, notify, lifecycle hooks |
+| Backend adapter | option mapping for fresh and resumed turns, event translation to text and usage, per-turn usage deltas | |
+| Wrapper | argv, process, stdin prompt, JSON events | |
+| Server `Invocations` | ids, held results, waiters | |
+
+The wrappers already have a `Session` struct that carries the resume id, and a
+`SessionServer`. The `SessionServer` blocks in `handle_call` for the whole
+turn, so it has no cancel, no status during a turn and no async result. The
+spike adds those in about 300 lines.
+
+Gaps the spike found in the released wrappers, each already fixed on the
+wrapper's main branch and waiting in a release PR:
+
+| Gap | Wrapper fix | Release PR |
+| --- | --- | --- |
+| `CodexWrapper.Session` dropped sandbox, approval policy, effort (`-c`) and `ignore_user_config` on resumed turns, and effort on every turn | codex_wrapper #142, #160 | codex_wrapper #165 (0.9.0) |
+| `ClaudeWrapper` one-shot path passed `false` env unsets to `System.cmd`, so every turn under the server's child env failed | claude_wrapper #338 | claude_wrapper #332 (0.19.0) |
+
+The GenAgent adapters did not hit either, because they map options and stream
+on their own. The adapters held logic that belongs in the wrappers.
+
+Still done by the adapter and not by the spike:
+
+- Codex reports cumulative usage on resumed turns; the adapter reports
+  per-turn deltas. The spike passes the cumulative numbers through.
+- Streaming events during a turn (activity, tool calls). The spike reports
+  only the terminal result.
+- HTTP backends (Anthropic, OpenAI). The wrappers cover only the CLIs.
+
+## Patterns to evaluate
+
+Each runs through `agent` on real backlog work and gets a scorecard row.
+
+| Pattern | Shape | What it tests |
+| --- | --- | --- |
+| Single-use subagent | One `agent` call with a whole issue, `wait_ms` or `agent_result` until done, then `agent_stop` | The native-subagent case: a caller hands off one task and reads one result. |
+| Counterpart session | One long-lived session per repository or role, several turns over hours: implement, answer a review, revise, explain | Session reuse, queued follow-ups, the caller and the session working as peers. |
+| Recursive | A session started through `agent` starts its own sessions through `agent` (CLI or MCP), for example an implementer starting a reviewer | Inherited access reaching the server itself, session ids passed between agents, no turn limit across levels. |
+
 ## Open questions
 
-- Is `session_id` an instance name, or an opaque id the server maps?
 - Should `isolation: worktree` exist, or should the prompt or a helper own worktrees?
 - Is a message without a turn (Codex `send_message`) needed?
-- How much of GenAgent does this need beyond the backend contract and one process per session?
+- The `agent` path needs one process per session and the wrappers, per the section above. Does anything else in GenAgent earn its place for CLI backends: streaming activity, usage deltas, telemetry?
+- `session_id` is a caller-chosen or generated name the server maps to the provider session id. Should sessions survive a server restart by resuming from that provider id?
