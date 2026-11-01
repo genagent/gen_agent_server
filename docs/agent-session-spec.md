@@ -362,7 +362,6 @@ Rules for the steps:
 - On start, after recovery (section 5.12), every session that was live comes back `idle`, as a dormant handle. Its next turn resumes its provider session id. It keeps its id, options, parent, counters and held results.
 - A session whose provider session id was never reported cannot be resumed. It comes back ended, with `end_reason: shutdown`.
 - Invocations that were `running` or `queued` come back `cancelled`, with `detail.by: shutdown`, and are never resent.
-- A session whose first turn never reported a provider session id comes back ended.
 - Idle expiry counts from `last_activity_at`, including time the layer was down.
 
 ## 6. Surfaces
