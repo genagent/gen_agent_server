@@ -9,8 +9,8 @@ Sixth run of [working-an-issue.md](../../working-an-issue.md). The server was th
 | Providers | Codex `inherit` for the codex_wrapper sessions; Claude `auto` for the recursive session; Claude `read_only` for the independent reviews; Codex `read_only` for the reviewers the recursive session started |
 | Sessions | Single-use: `single-156`, `single-170-revise`, `single-174-footer`. Counterpart: `counterpart-codex-wrapper`, three turns. Recursive: `recursive-315`, two turns, plus self-started `review-315` and `review-351-confirm`. Reviews: `review-170`, `review-171`, `review-351` |
 | Artifacts | [Turn summary](summary.json) |
-| Commits | #170: `7f00ab7`, `352ffb4`. #174: `a87d02d`, `575ac55`. #171: `7b285df`, `cd602af`. #173: `07acb72`, `00e9d57`. #351: `85ebe46`, `70ece8c`, `5b878ab`, `6c0650d`, `03ed771`, `77a00f3` |
-| Cost | Claude reported $22.01 over six turns. Codex reports no cost; its turns are not included |
+| Commits | #170: `7f00ab7`, `352ffb4`. #174: `a87d02d`, `575ac55`. #171: `7b285df`, `cd602af`. #173: `07acb72`, `00e9d57`. #351: `85ebe46`, `70ece8c`, `5b878ab`, `6c0650d`, `03ed771`, `77a00f3`, `9390395` |
+| Cost | Claude reported $31.53 over seven turns. Codex reports no cost; its turns are not included |
 
 ## Turns
 
@@ -47,6 +47,8 @@ Turn 2 of this session was the cross-review of #170, listed under the single-use
 | Review | Claude `read_only`, `review-351` | [review instructions, issue, and diff](review-351-prompt.md) | 164 s ($1.85) | [REQUEST CHANGES](review-351.md): seven items, none found by the self-started reviewer |
 | Revise | Claude `auto`, same session, turn 2 | [review defects verbatim, confirm through a fresh reviewer](revise-351.md) | 1228 s ($8.43) | [Report](r-315-2.md): fixed six items, documented one; 1065 tests; CI green on `77a00f3` |
 | Confirm review | Codex `read_only`, `review-351-confirm`, started by the implementer | written by the implementer, not retained | not recorded | From the implementer's report: confirmed items 1 to 7, found three new defects, REQUEST CHANGES. Fixed in `77a00f3`, which was not reviewed again |
+| Second review | Claude `read_only`, `review-351b` | [earlier items, implementer's account, issue, and diff](review-351b-prompt.md) | 101 s ($1.66) | [APPROVE](review-351b.md) with five minor items |
+| Minor fixes | Claude `auto`, same session, turn 3 | [the five items verbatim](revise-351b.md) | 757 s ($9.52) | [Report](r-315-3.md): `9390395`; one CI flake in an untouched `StreamTest`, rerun green; CI 6/6 |
 
 ## Verification
 
@@ -90,4 +92,7 @@ The operator recorded #173 with CI 5/5, no trailers, and no em dashes, and #174 
 | The operator read #170's PR title, `feat(env)!`, which had been changed after the merge. The squash commit `590ef0b` has no `!` and no footer. The instruction to drop the marker on #174 was wrong. | Behavioural | The session's note was right. #174 got an empty commit `575ac55` with a `!` subject and a `BREAKING CHANGE` footer. The owner must keep the `!` title and footer when squash-merging #174. |
 | The first replacement prompt asked for amend and force push. The operator's auto-mode safety check blocked it as destructive git. | Mechanical | Reworked to an empty commit and a `!` title, with no history rewrite. |
 | The last fix commits, `6c0650d` after turn 1 and `77a00f3` after turn 2, were not reviewed again by the implementer's reviewers. | Behavioural | The operator started review-351 for `6c0650d` and, at the owner's request, [review-351b](review-351b.md) for `77a00f3` (101 s, $1.66): APPROVE, all earlier items resolved, five minor items (two doc gaps, a duplicated evidence builder, a timing-sensitive test, a ragged doc line). The operator confirmed them in the code. |
+| The prompt for the minor fixes was built in an unquoted heredoc; zsh ran three backticked phrases as commands and dropped them. The quoted review items came from a file and arrived intact. | Mechanical | Operator error. A file-based prompt parameter (`@path`, friction from run 1) avoids shell quoting. |
+| The recursive session's report counted 8 CI jobs; the workflow has six and `gh pr checks` printed two twice. The session corrected this itself in turn 3. | Behavioural | Count distinct check names. |
+| `ClaudeWrapper.StreamTest` timed out at 60 s on Elixir 1.18 / OTP 27 in turn 3's CI and earlier on `feat/query-print-flags-328` (run 41273102662). | Mechanical | Existing flaky test, outside this PR; rerun passed. Candidate issue in claude_wrapper. |
 | An agent drafted this record from artifacts and operator notes. | Behavioural | The operator checks it. |
