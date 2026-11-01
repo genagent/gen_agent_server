@@ -137,17 +137,20 @@ defmodule Mix.Tasks.GenAgentServer.Ops do
     end
   end
 
-  defp rpc_timeout(%{name: "result"}, args) do
-    case args["wait_ms"] do
-      wait when is_integer(wait) and wait >= 0 and wait <= 600_000 -> wait + 30_000
-      _ -> 30_000
-    end
-  end
-
   defp rpc_timeout(op, args) do
-    if Enum.any?(op.params, &(&1.name == "timeout_ms")),
-      do: (args["timeout_ms"] || 3_600_000) + 30_000,
-      else: 30_000
+    cond do
+      Enum.any?(op.params, &(&1.name == "wait_ms")) ->
+        case args["wait_ms"] do
+          wait when is_integer(wait) and wait >= 0 and wait <= 600_000 -> wait + 30_000
+          _ -> 30_000
+        end
+
+      Enum.any?(op.params, &(&1.name == "timeout_ms")) ->
+        (args["timeout_ms"] || 3_600_000) + 30_000
+
+      true ->
+        30_000
+    end
   end
 
   defp release_bin! do

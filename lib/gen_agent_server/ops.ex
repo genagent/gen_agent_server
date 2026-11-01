@@ -39,7 +39,10 @@ defmodule GenAgentServer.Ops do
   Raises `ArgumentError` when two operations share a name.
   """
   def operations do
-    ops = base_operations() ++ GenAgentServer.Extension.operations()
+    ops =
+      base_operations() ++
+        GenAgentServer.Ops.Agent.operations() ++ GenAgentServer.Extension.operations()
+
     names = Enum.map(ops, & &1.name)
 
     case names -- Enum.uniq(names) do

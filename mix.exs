@@ -32,6 +32,10 @@ defmodule GenAgentServer.MixProject do
       {:gen_agent_ensemble, "~> 0.8.0"},
       {:gen_agent_claude, "~> 0.4.0"},
       {:gen_agent_codex, "~> 0.7.0"},
+      # gen_agent_claude 0.4.0 caps claude_wrapper below the 0.19.0 env fix (#338).
+      {:claude_wrapper, "~> 0.19.0", override: true},
+      # gen_agent_codex 0.7.0 caps codex_wrapper below the 0.9.0 resume option fix (#142).
+      {:codex_wrapper, "~> 0.9.0", override: true},
       {:jason, "~> 1.4"},
       {:telemetry, "~> 1.0"}
     ]
