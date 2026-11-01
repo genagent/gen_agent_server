@@ -30,7 +30,7 @@ Build and start the release once per session, from a clean server checkout.
 ```bash
 cd gen_agent_server
 MIX_ENV=prod mix release --overwrite
-export RELEASE_NODE=gen_agent_server
+export RELEASE_NODE=gen_agent_server_dogfood
 _build/prod/rel/gen_agent_server/bin/gen_agent_server daemon
 mix gen_agent_server.remote instances
 ```
@@ -94,6 +94,16 @@ The prompt carries the issue text and the operating constraints:
 - End with a summary: files changed, behaviour added, tests added, anything
   not done and why.
 
+For a Codex `workspace_write` route, also tell the agent what the sandbox
+blocks, so it neither works around it silently nor reports it as a failure of
+its change:
+
+- no network: no `mix deps.get`, no live provider calls; native CLI probes
+  are run by the operator on the host;
+- Mix's TCP concurrency lock: run Mix with `MIX_OS_CONCURRENCY_LOCK=0`;
+- process inspection (`ps`): tests that inspect OS processes fail in the
+  sandbox; the host test run is authoritative.
+
 Keep the exact prompt in the run record.
 
 ### 7. Invoke and wait
@@ -103,6 +113,17 @@ MIX_QUIET=1 mix gen_agent_server.ops invoke --remote --instance REPO-N --agent i
 MIX_QUIET=1 mix gen_agent_server.ops result --remote --instance REPO-N --id ID
 ```
 
+`result` returns `"status": "pending"` until the turn ends; nothing waits for
+it, so the operator polls:
+
+```bash
+until MIX_QUIET=1 mix gen_agent_server.ops result --remote --instance REPO-N --id ID > result.json &&
+  ! grep -q '"status": "pending"' result.json; do sleep 30; done
+```
+
+A completed result has `status`, `text`, `usage`, `session_id` and
+`duration_ms`. It does not say which model ran or which files changed.
+
 ### 8. Verify outside the agent
 
 The agent's report is evidence about the task, not proof. The operator:
@@ -110,7 +131,9 @@ The agent's report is evidence about the task, not proof. The operator:
 - reads the full diff (`git diff`, `git status` for new files);
 - runs the repository's checks on the host;
 - checks each acceptance criterion against the code and tests, and marks any
-  criterion the change does not meet.
+  criterion the change does not meet;
+- runs any acceptance step the sandbox prevented, such as a native CLI probe,
+  and passes the observed result to the agent in step 9.
 
 ### 9. Revise
 
@@ -141,3 +164,12 @@ to this procedure, a server or core fix, or an optional helper.
 
 | Run | Step | Observation | Candidate response |
 | --- | --- | --- | --- |
+| [codex_wrapper #153](runs/2026-11-01-codex-wrapper-153/README.md) | 1 | `mix.exs` pins gen_agent `~> 0.11.0`, gen_agent_claude `~> 0.4.0`, gen_agent_codex `~> 0.7.0`, so the release does not use core 0.12 or the current adapters. | Server fix: widen the requirements. |
+| codex_wrapper #153 | 3 | Two clones of each wrapper exist locally (under `genagent/` and `joshrotenberg/`); the operator has to know which one is current. | Environment; no server change. |
+| codex_wrapper #153 | 7 | String parameters do not accept `@path`, so the prompt goes on argv through `"$(cat prompt.txt)"`. | Helper: `@path` for string parameters in `mix gen_agent_server.ops`. |
+| codex_wrapper #153 | 7 | Nothing waits for a result; the operator polls `result` in a shell loop (7 polls for a 174 s turn). | Server fix: a wait timeout on `result`, or a blocking await operation. |
+| codex_wrapper #153 | 7 | Mix's TCP concurrency lock is blocked in the Codex sandbox; the agent found `MIX_OS_CONCURRENCY_LOCK=0` itself. | Procedure: stated in step 6. Candidate server fix: set it in the Codex child env for `workspace_write` routes. |
+| codex_wrapper #153 | 7 | `ps` is blocked in the sandbox; 14 existing process-cleanup tests failed in the agent and passed on the host. | Procedure: stated in step 6; the host run is authoritative. |
+| codex_wrapper #153 | 7 | No network in the sandbox; the native probe in the acceptance list could not run, and the agent recorded the blocked attempt. | Procedure: native probes are the operator's (steps 6 and 8). |
+| codex_wrapper #153 | 7 | The result has no model name and no list of changed files. | Candidate server fix: model in the result. Changed files come from `git status`. |
+| codex_wrapper #153 | 9 | The revision turn reused the implementation session and took 19 s. | None; works as intended. |
