@@ -10,7 +10,7 @@ Sixth run of [working-an-issue.md](../../working-an-issue.md). The server was th
 | Sessions | Single-use: `single-156`, `single-170-revise`, `single-174-footer`. Counterpart: `counterpart-codex-wrapper`, three turns. Recursive: `recursive-315`, two turns, plus self-started `review-315` and `review-351-confirm`. Reviews: `review-170`, `review-171`, `review-351` |
 | Artifacts | [Turn summary](summary.json) |
 | Commits | #170: `7f00ab7`, `352ffb4`. #174: `a87d02d`, `575ac55`. #171: `7b285df`, `cd602af`. #173: `07acb72`, `00e9d57`. #351: `85ebe46`, `70ece8c`, `5b878ab`, `6c0650d`, `03ed771`, `77a00f3` |
-| Cost | Claude reported $20.35 over five turns. Codex reports no cost; its turns are not included |
+| Cost | Claude reported $22.01 over six turns. Codex reports no cost; its turns are not included |
 
 ## Turns
 
@@ -89,5 +89,5 @@ The operator recorded #173 with CI 5/5, no trailers, and no em dashes, and #174 
 | The Claude reviewer of #171 reported a line-length defect that CI's format check contradicts. | Behavioural | The operator told the counterpart to ignore it unless `mix format` changed the line. It did not. |
 | The operator read #170's PR title, `feat(env)!`, which had been changed after the merge. The squash commit `590ef0b` has no `!` and no footer. The instruction to drop the marker on #174 was wrong. | Behavioural | The session's note was right. #174 got an empty commit `575ac55` with a `!` subject and a `BREAKING CHANGE` footer. The owner must keep the `!` title and footer when squash-merging #174. |
 | The first replacement prompt asked for amend and force push. The operator's auto-mode safety check blocked it as destructive git. | Mechanical | Reworked to an empty commit and a `!` title, with no history rewrite. |
-| The last fix commits, `6c0650d` after turn 1 and `77a00f3` after turn 2, were not reviewed again. | Behavioural | The operator started review-351 for `6c0650d`. `77a00f3` remains unreviewed. |
+| The last fix commits, `6c0650d` after turn 1 and `77a00f3` after turn 2, were not reviewed again by the implementer's reviewers. | Behavioural | The operator started review-351 for `6c0650d` and, at the owner's request, [review-351b](review-351b.md) for `77a00f3` (101 s, $1.66): APPROVE, all earlier items resolved, five minor items (two doc gaps, a duplicated evidence builder, a timing-sensitive test, a ragged doc line). The operator confirmed them in the code. |
 | An agent drafted this record from artifacts and operator notes. | Behavioural | The operator checks it. |
