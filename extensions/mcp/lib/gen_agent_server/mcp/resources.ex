@@ -98,14 +98,15 @@ defmodule GenAgentServer.MCP.Resources.Quickstart do
   4. Call `stop_instance` when finished. This discards that instance's routes,
      sessions, and results. The default instance cannot be stopped.
 
-  Claude defaults to `read_only`: its CLI runs in `dontAsk` mode with only
-  Read, Grep, and Glob tools. `plan` is also available, but Claude CLI 2.1.284
-  has ignored an explicit `--model` in plan mode in live tests. Codex defaults
-  to a read-only sandbox, disabled approvals, and ignored user config. A route
-  may explicitly set `claude_permission_mode` to `accept_edits`, `codex_sandbox` to
-  `workspace_write`, `codex_user_config` to `inherit`, or
-  `codex_response_text` to `final_message`. These are provider controls, not a
-  server-enforced filesystem boundary. Review edits before
+  CLI routes default to `inherit`: server access overrides are omitted and the
+  server process user's CLI settings apply. Transient client permissions are
+  not transferred. Headless sessions cannot answer prompts; Codex retains
+  disabled approvals. See `gen-agent://guide/capabilities` for access limits.
+  Explicit Claude modes include `read_only`, `plan`, `accept_edits`, `auto`,
+  `bypass_permissions`, and `dont_ask`. Codex sandbox accepts `inherit`,
+  `read_only`, or `workspace_write`; user config accepts `inherit` or `ignore`.
+  Reproducing the previous complete Codex configuration requires both
+  `read_only` and `ignore`. Review edits before
   merging. `create_instance` does not itself run a model; `invoke` and `ask` do.
 
   The MCP surface is deliberately scoped to instance lifecycle, invocation,
@@ -234,10 +235,11 @@ defmodule GenAgentServer.MCP.Resources.Capabilities do
   dynamic schedule edits, general Codex native-session messaging, or a dashboard. Do not
   infer those capabilities from the underlying OTP or wrapper libraries.
 
-  A created Claude route defaults to restricted read tools; a created Codex
-  route defaults to a read-only sandbox. The caller must explicitly request
-  edit access. These provider controls do not replace host filesystem
-  permissions or review of generated changes.
+  MCP `create_instance` clients can request Claude `bypass_permissions` explicitly.
+
+  Created CLI routes inherit server-user CLI settings by default. Headless
+  sessions cannot answer prompts; Codex retains disabled approvals. These
+  controls do not replace host permissions or review of generated changes.
   """
 
   @impl true

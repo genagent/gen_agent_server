@@ -308,7 +308,8 @@ defmodule GenAgentServerTest do
       cwd: ".",
       providers: ["claude", "codex"],
       claude_permission_mode: "accept_edits",
-      codex_sandbox: "workspace_write"
+      codex_sandbox: "workspace_write",
+      codex_user_config: "ignore"
     }
 
     File.write!(path, Jason.encode!(%{profiles: [profile]}))

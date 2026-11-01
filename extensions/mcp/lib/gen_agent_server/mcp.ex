@@ -23,8 +23,8 @@ defmodule GenAgentServer.MCP do
 
     1. `create_instance` with a name and routes, each with a provider
        (`echo`, `claude`, `codex`) and optionally a model and effort. Claude
-       defaults to a limited read-only toolset and Codex to a read-only sandbox;
-       edit modes are explicit per-route opt-ins. Configuration is fixed at
+       and Codex inherit server-user CLI settings by default;
+       explicit access modes are available per route. Configuration is fixed at
        creation; to change a model, create another instance.
     2. `describe_instance` returns each route's provider, model, effort, mode,
        response text selection, and cwd, and the instance's `max_in_flight`

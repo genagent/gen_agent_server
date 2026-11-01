@@ -12,13 +12,13 @@ defmodule GenAgentServer.RunTest do
 
       assert {:ok, opts} = Providers.backend_opts("codex", cwd: File.cwd!(), model: "m")
 
-      assert opts[:sandbox] == :read_only and opts[:approval_policy] == :never and
+      assert opts[:sandbox] == nil and opts[:approval_policy] == :never and
                opts[:model] == "m"
 
       assert opts[:working_dir] == File.cwd!()
       refute Keyword.has_key?(opts, :cwd)
 
-      assert opts[:ignore_user_config] == true
+      refute Keyword.has_key?(opts, :ignore_user_config)
       assert opts[:response_text] == :all_messages
 
       assert {:ok, final_message} =
@@ -38,7 +38,7 @@ defmodule GenAgentServer.RunTest do
       refute Keyword.has_key?(inherited, :ignore_user_config)
 
       assert {:ok, opts} = Providers.backend_opts("claude", cwd: File.cwd!())
-      assert opts[:permission_mode] == :plan
+      refute Keyword.has_key?(opts, :permission_mode)
       assert opts[:working_dir] == File.cwd!()
       refute Keyword.has_key?(opts, :cwd)
 
@@ -124,14 +124,55 @@ defmodule GenAgentServer.RunTest do
                })
     end
 
-    test "edit modes are opt-in and limited to the profile choices" do
+    test "all Claude modes and explicit sandbox inheritance reach providers" do
+      for mode <- [
+            :inherit,
+            :read_only,
+            :plan,
+            :accept_edits,
+            :auto,
+            :bypass_permissions,
+            :dont_ask
+          ] do
+        spec = %{
+          "pattern" => "solo",
+          "agent" => %{"provider" => "claude"},
+          "claude_permission_mode" => Atom.to_string(mode)
+        }
+
+        assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
+                 PatternSpec.parse(spec, cwd: File.cwd!())
+
+        assert {:ok, ^opts} =
+                 Providers.backend_opts("claude", cwd: File.cwd!(), claude_permission_mode: mode)
+      end
+
+      for sandbox <- ["inherit", "read_only", "workspace_write"] do
+        spec = %{
+          "pattern" => "solo",
+          "agent" => %{"provider" => "codex"},
+          "codex_sandbox" => sandbox,
+          "codex_user_config" => "ignore"
+        }
+
+        assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
+                 PatternSpec.parse(spec, cwd: File.cwd!())
+
+        assert opts[:sandbox] ==
+                 if(sandbox == "inherit", do: nil, else: String.to_existing_atom(sandbox))
+
+        assert opts[:ignore_user_config]
+      end
+    end
+
+    test "explicit access settings are limited to the shared provider choices" do
       codex = %{"pattern" => "solo", "agent" => %{"provider" => "codex"}}
 
       assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =
                PatternSpec.parse(codex, cwd: File.cwd!())
 
-      assert opts[:sandbox] == :read_only
-      assert opts[:ignore_user_config] == true
+      assert opts[:sandbox] == nil
+      refute Keyword.has_key?(opts, :ignore_user_config)
       assert opts[:response_text] == :all_messages
 
       assert {:ok, %{strategy_opts: [agent: {_, _, opts}]}} =

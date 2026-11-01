@@ -57,11 +57,12 @@ defmodule GenAgentServer.PatternSpec do
   Parse `spec`. `opts` supplies defaults for agent entries: `:cwd`,
   `:codex_sandbox`, `:codex_user_config`, `:codex_response_text`,
   `:claude_permission_mode`. The spec keys `"cwd"`,
-  `"codex_sandbox"` (`"read_only"` or `"workspace_write"`),
-  `"codex_user_config"` (`"ignore"` or `"inherit"`),
+  `"codex_sandbox"` (`"inherit"`, `"read_only"` or `"workspace_write"`),
+  `"codex_user_config"` (`"inherit"` (default) or `"ignore"`),
   `"codex_response_text"` (`"all_messages"` or `"final_message"`), and
-  `"claude_permission_mode"` (`"plan"` or `"accept_edits"`) override them.
-  Both CLI providers are read-only unless a spec opts in.
+  `"claude_permission_mode"` (`"inherit"`, `"read_only"`, `"plan"`, `"accept_edits"`,
+  `"auto"`, `"bypass_permissions"`, or `"dont_ask"`) override them.
+  Both CLI providers inherit server-user CLI access settings by default.
   """
   @spec parse(map(), keyword()) :: {:ok, plan()} | {:error, term()}
   def parse(spec, opts \\ [])
@@ -147,26 +148,20 @@ defmodule GenAgentServer.PatternSpec do
 
   # Provider options are limited to the choices profiles allow.
   defp provider_options(spec, opts) do
-    with {:ok, opts} <-
-           edit_mode(spec, opts, "codex_sandbox", %{
-             "read_only" => :read_only,
-             "workspace_write" => :workspace_write
-           }),
+    with {:ok, opts} <- edit_mode(spec, opts, "codex_sandbox", access_choices(:codex_sandbox)),
          {:ok, opts} <-
-           edit_mode(spec, opts, "codex_user_config", %{
-             "ignore" => :ignore,
-             "inherit" => :inherit
-           }),
+           edit_mode(spec, opts, "codex_user_config", access_choices(:codex_user_config)),
          {:ok, opts} <-
            edit_mode(spec, opts, "codex_response_text", %{
              "all_messages" => :all_messages,
              "final_message" => :final_message
            }) do
-      edit_mode(spec, opts, "claude_permission_mode", %{
-        "plan" => :plan,
-        "accept_edits" => :accept_edits
-      })
+      edit_mode(spec, opts, "claude_permission_mode", access_choices(:claude_permission_mode))
     end
+  end
+
+  defp access_choices(key) do
+    Map.new(Providers.access_choices(key), &{Atom.to_string(&1), &1})
   end
 
   defp edit_mode(spec, opts, key, choices) do

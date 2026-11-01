@@ -336,10 +336,28 @@ defmodule GenAgentServer.Ops do
         },
         "claude_permission_mode" => %{
           "type" => "string",
-          "enum" => ["read_only", "plan", "accept_edits"]
+          "enum" =>
+            Enum.map(
+              GenAgentServer.Providers.access_choices(:claude_permission_mode),
+              &Atom.to_string/1
+            ),
+          "description" => "Defaults to inherit: omit server permission and tools overrides."
         },
-        "codex_sandbox" => %{"type" => "string", "enum" => ["read_only", "workspace_write"]},
-        "codex_user_config" => %{"type" => "string", "enum" => ["ignore", "inherit"]},
+        "codex_sandbox" => %{
+          "type" => "string",
+          "enum" =>
+            Enum.map(GenAgentServer.Providers.access_choices(:codex_sandbox), &Atom.to_string/1),
+          "description" => "Defaults to inherit: omit the sandbox override."
+        },
+        "codex_user_config" => %{
+          "type" => "string",
+          "enum" =>
+            Enum.map(
+              GenAgentServer.Providers.access_choices(:codex_user_config),
+              &Atom.to_string/1
+            ),
+          "description" => "Defaults to inherit the server user CLI configuration."
+        },
         "codex_response_text" => %{
           "type" => "string",
           "enum" => ["all_messages", "final_message"],

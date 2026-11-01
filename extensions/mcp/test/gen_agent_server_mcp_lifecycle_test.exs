@@ -220,6 +220,7 @@ defmodule GenAgentServer.MCPLifecycleTest do
     } do
       created = ok!(client, "create_instance", %{"instance" => name, "config" => config(dir)})
       assert created["configured"] == true
+      assert hd(created["routes"])["claude_permission_mode"] == "inherit"
       assert Enum.map(created["routes"], & &1["name"]) == ["fast", "deep", "plain"]
 
       assert ok!(client, "describe_instance", %{"instance" => name}) == created

@@ -108,14 +108,16 @@ and pick each route's provider and model:
    instance cannot be stopped.
 
 Route keys are `name`, `provider` (`echo`, `claude`, `codex`), `model`,
-`effort`, `cwd`, and the access options `claude_permission_mode` (`read_only` by
-default for dynamic routes, `plan`, or `accept_edits`), `codex_sandbox` (`read_only` by default, or
-`workspace_write`), and `codex_user_config` (`ignore` by default, or `inherit`).
+`effort`, `cwd`, and access options.
+
+Access defaults to `inherit`, omitting server overrides and using the server
+process user's CLI settings. See [provider access](../../README.md#provider-access)
+for supported modes, migration guidance, and headless-session limitations.
+MCP `create_instance` clients can request Claude `bypass_permissions` explicitly.
+
 Codex routes also accept `codex_response_text` (`all_messages` by default, or
 `final_message`). The default joins every completed agent message; the opt-in
-uses only the last completed agent message for the result text. Edit modes,
-config inheritance, and final-message selection are explicit per-route
-opt-ins. `effort` is
+uses only the last completed agent message for the result text. `effort` is
 `low`, `medium`, `high`, `xhigh`, or `max` for Claude, and `low`, `medium`, or
 `high` for Codex, where it is sent as the fixed `model_reasoning_effort` config
 override on both fresh and resumed turns. `echo` accepts only `name` and
@@ -125,13 +127,10 @@ of letters, digits, `.`, `_`, `:`, `/`, `@`, `[`, `]`, `-`, not starting with
 `-`); the provider CLI decides whether it exists for the account. Up to 16
 routes, `max_in_flight` up to 64, and `max_results` up to 1000.
 
-For dynamic Claude routes, `read_only` uses the CLI's `dontAsk` mode with only
-Read, Grep, and Glob tools available. It honored the selected Haiku model in
-a live MCP turn. `plan` remains available, but Claude CLI 2.1.284 ignored an
-explicit `--model haiku` and used Sonnet in a live plan-mode turn. Static
-startup profiles keep their existing plan-mode default. Claude's CLI permission
-modes and tool list are not a filesystem sandbox; use a separate worktree for
-untrusted tasks.
+Claude CLI 2.1.284 honored the selected Haiku model in a live `read_only` MCP
+turn, but ignored an explicit `--model haiku` and used Sonnet in a live
+plan-mode turn. Claude's CLI permission modes and tool list are not a
+filesystem sandbox; use a separate worktree for untrusted tasks.
 
 Everything is validated before anything starts, so an invalid configuration, a
 duplicate route, or a name already in use returns an error (`invalid_config`,

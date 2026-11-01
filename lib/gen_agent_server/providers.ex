@@ -3,12 +3,12 @@ defmodule GenAgentServer.Providers do
   The provider names this server accepts and the backend options it uses for
   each.
 
-  Static profiles default Claude to plan permission mode. Dynamic MCP routes
-  default to `:read_only`, which uses `dontAsk` with only Read, Grep, and Glob
-  tools. Codex defaults to a read-only sandbox with approvals disabled and the
-  host user's config ignored. Callers can opt in to edit modes or config
-  inheritance. Codex response text defaults to all completed agent messages;
-  callers can instead select only the final completed message.
+  Access defaults to `:inherit`: no server tools, permission mode, sandbox, or
+  user-config overrides are supplied. CLI settings belong to the server process
+  user; transient client permissions are not transferred. Headless sessions
+  cannot answer prompts. Codex retains disabled approvals. Effective access
+  depends on CLI configuration and host permissions. Codex response text defaults
+  to all completed agent messages.
   """
 
   @claude_efforts [:low, :medium, :high, :xhigh, :max]
@@ -19,6 +19,18 @@ defmodule GenAgentServer.Providers do
     "claude" => GenAgent.Backends.Claude,
     "codex" => GenAgent.Backends.Codex
   }
+
+  @doc "Fixed access choices, with the default first."
+  def access_choices(:claude_permission_mode),
+    do: [:inherit, :read_only, :plan, :accept_edits, :auto, :bypass_permissions, :dont_ask]
+
+  def access_choices(:codex_sandbox), do: [:inherit, :read_only, :workspace_write]
+  def access_choices(:codex_user_config), do: [:inherit, :ignore]
+
+  # Runtime configuration must not capture application overrides or child env
+  # while config/runtime.exs is still being evaluated. Instance start hardens it.
+  @doc false
+  def startup_backend_opts(provider, opts), do: build_opts(provider, opts)
 
   @doc "Provider names, sorted."
   def names, do: @backends |> Map.keys() |> Enum.sort()
@@ -32,11 +44,11 @@ defmodule GenAgentServer.Providers do
 
     * `:cwd` -- project directory for the CLI backends (required for `claude`
       and `codex`).
-    * `:codex_sandbox` -- `:read_only` (default) or `:workspace_write`.
-    * `:codex_user_config` -- `:ignore` (default) or `:inherit`.
+    * `:codex_sandbox` -- `:inherit` (default), `:read_only`, or `:workspace_write`.
+    * `:codex_user_config` -- `:inherit` (default) or `:ignore`.
     * `:codex_response_text` -- `:all_messages` (default) or `:final_message`.
-    * `:claude_permission_mode` -- `:plan` (default for profiles),
-      `:read_only` (default for dynamic routes), or `:accept_edits`.
+    * `:claude_permission_mode` -- `:inherit` (default), `:read_only`, `:plan`,
+      `:accept_edits`, `:auto`, `:bypass_permissions`, or `:dont_ask`.
     * `:model` -- model name passed to the CLI backends.
     * `:effort` -- reasoning effort, one of `efforts/1` for the provider.
       Claude takes it as its `:effort` option. Codex gets the fixed
@@ -87,7 +99,8 @@ defmodule GenAgentServer.Providers do
 
   defp build_opts("claude", opts) do
     with {:ok, cwd} <- fetch_cwd(opts),
-         {:ok, mode} <- choice(opts, :claude_permission_mode, [:plan, :read_only, :accept_edits]),
+         {:ok, mode} <-
+           choice(opts, :claude_permission_mode, access_choices(:claude_permission_mode)),
          {:ok, effort} <- effort(opts, @claude_efforts) do
       base = [backend: @backends["claude"], working_dir: cwd] ++ claude_access_opts(mode)
       base = if effort, do: base ++ [effort: effort], else: base
@@ -97,19 +110,20 @@ defmodule GenAgentServer.Providers do
 
   defp build_opts("codex", opts) do
     with {:ok, cwd} <- fetch_cwd(opts),
-         {:ok, sandbox} <- choice(opts, :codex_sandbox, [:read_only, :workspace_write]),
-         {:ok, user_config} <- choice(opts, :codex_user_config, [:ignore, :inherit]),
+         {:ok, sandbox} <- choice(opts, :codex_sandbox, access_choices(:codex_sandbox)),
+         {:ok, user_config} <-
+           choice(opts, :codex_user_config, access_choices(:codex_user_config)),
          {:ok, response_text} <-
            choice(opts, :codex_response_text, [:all_messages, :final_message]),
          {:ok, effort} <- effort(opts, @codex_efforts) do
       base = [
         backend: @backends["codex"],
         working_dir: cwd,
-        sandbox: sandbox,
         approval_policy: :never,
         response_text: response_text
       ]
 
+      base = if sandbox == :inherit, do: base, else: base ++ [sandbox: sandbox]
       base = if user_config == :ignore, do: base ++ [ignore_user_config: true], else: base
 
       base =
@@ -122,6 +136,8 @@ defmodule GenAgentServer.Providers do
   end
 
   defp build_opts(provider, _opts), do: {:error, {:unknown_provider, provider}}
+
+  defp claude_access_opts(:inherit), do: []
 
   defp claude_access_opts(:read_only),
     do: [permission_mode: :dont_ask, tools: ["Read", "Grep", "Glob"]]
