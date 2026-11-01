@@ -47,7 +47,7 @@ session. Routes default to inherited access (#137).
 
 ## Proposed `agent` operation
 
-Status: implemented as a spike over the wrappers in #140 and used from run 6.
+Status: implemented as a spike over the wrappers in #140 and used in run 6. The supported version moves to a wrappers-only library; see "Where it lives".
 
 ```
 agent(
@@ -171,6 +171,43 @@ Each runs through `agent` on real backlog work and gets a scorecard row.
 | Single-use subagent | One `agent` call with a whole issue, `wait_ms` or `agent_result` until done, then `agent_stop` | The native-subagent case: a caller hands off one task and reads one result. |
 | Counterpart session | One long-lived session per repository or role, several turns over hours: implement, answer a review, revise, explain | Session reuse, queued follow-ups, the caller and the session working as peers. |
 | Recursive | A session started through `agent` starts its own sessions through `agent` (CLI or MCP), for example an implementer starting a reviewer | Inherited access reaching the server itself, session ids passed between agents, no turn limit across levels. |
+
+## Where it lives (plan, 2026-11-01)
+
+Two objectives drive this:
+
+1. **The interface.** One interface that lets an agent or a human create, resume and drive headless Claude or Codex sessions for any task, single-use or ongoing.
+2. **The machinery question.** Whether the wrappers plus a thin layer and an MCP surface are enough, without GenAgent in the middle.
+
+The #140 spike answered objective 2 for the turn path, but it lives in gen_agent_server, which depends on GenAgent, Ensemble and both adapters for its instance path. A layer inside that package cannot show it does without them. So the session layer moves out:
+
+| Piece | Depends on | Contents |
+| --- | --- | --- |
+| Library (name open) | claude_wrapper, codex_wrapper, telemetry | Session registry and supervisor, one process per session, queue, held results and waiters, cancel, stop, adopt by provider session id, ended-session records, cwd check, child environment hygiene. No MCP, no HTTP, no scheduler. |
+| Adapter, in the same repository | the library, snodo, cheer, Burrito | The operations as MCP tools (stdio first, then a shared HTTP instance that clients find or start), the same operations as a CLI for humans, and `init`, which installs the plugin for Claude Code and Codex. This follows the hexpm-mcp layout. |
+| gen_agent_server | the library | Second consumer: its `agent` operations call the library instead of carrying their own copy. The instance path is unchanged. |
+
+Prior art: `session-fleet-design.md` (local note, 2026-10-18) lists six earlier session managers. Each one was built inside a server and rebuilt by the next. Its conclusion was the manager alone as a library, with adapters on top. Its rule applies here too: stop after the second slice if no second consumer shows up.
+
+### Interface, carried over and refined by runs 1 to 6
+
+- `agent(prompt, session_id?, name?, cwd?, provider?, model?, effort?, access?, wait_ms?, parent_session_id?)`: start or continue a session. Options that apply only at creation are rejected on a continuation.
+- `agent(prompt, resume: provider_session_id, ...)`: adopt an existing Claude session id or Codex thread id, so a session outlives the server and any session can be picked up.
+- `agent_result(session_id, invocation_id?, wait_ms?)` reads the latest invocation when no id is given.
+- `agent_cancel(session_id)`, `agent_stop(session_id)`, `agent_sessions(include_ended?)`.
+- Defaults:
+  - access inherits, and the doc says what that resolves to for each provider (#143);
+  - no turn limit;
+  - prompts sent during a turn queue behind it;
+  - every session records its parent and depth.
+
+### Slices
+
+1. **Library core.** Extract `GenAgentServer.Session` and its providers from #140. Add the cwd check (#141), ended-session records (#142), adopt by provider id, and the environment hygiene: strip host session variables such as `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID` and `MIX_*`, and set parent and depth. Use process-group cleanup through Forcola. Covered by fake-CLI tests and an opt-in live test.
+2. **Adapter.** MCP stdio tools and a CLI over the same operations, with `@path` for text arguments (#144) and a Burrito binary (#145). Run the three run 6 patterns through it from Claude Code and Codex. The recursive pattern then goes over MCP, not a Mix task.
+3. **Second consumer.** gen_agent_server's `agent` operations call the library. #140's own copy is removed.
+
+The objective 2 check: the adapter's release has no GenAgent, Ensemble or adapter in its dependency tree, and it carries the same three patterns as run 6.
 
 ## Open questions
 
