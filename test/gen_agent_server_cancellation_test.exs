@@ -101,11 +101,128 @@ defmodule GenAgentServerCancellationTest do
          strategy: EnsembleFixture,
          max_in_flight: Keyword.get(opts, :max_in_flight, 4),
          max_results: Keyword.get(opts, :max_results, 10),
-         poll_interval_ms: 60_000},
+         poll_interval_ms: Keyword.get(opts, :poll_interval_ms, 60_000)},
         id: {name, :owner}
       )
 
     {name, ensemble, owner}
+  end
+
+  test "result waiters receive every terminal outcome through polling" do
+    for outcome <- [{:ok, :done}, {:error, :failure}, {:error, :cancelled}] do
+      {name, ensemble, owner} = fixture(poll_interval_ms: 5)
+      {id, token, _} = invoke(name)
+
+      tasks =
+        for _ <- 1..2, do: Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 1_000) end)
+
+      await_waiters(owner, id, 2)
+      assert :ok = GenServer.call(ensemble, {:entries, [{token, outcome}]})
+
+      expected =
+        case outcome do
+          {:ok, value} -> {:ok, :completed, value}
+          {:error, reason} -> {:ok, :failed, reason}
+        end
+
+      for task <- tasks, do: assert(Task.await(task) == expected)
+      assert GenAgentServer.result(name, id, wait_ms: 600_000) == expected
+      assert :sys.get_state(owner).waiters == %{}
+    end
+  end
+
+  test "cancel serves its caller and wakes an existing result waiter" do
+    {name, _ensemble, owner} = fixture()
+    {id, _, _} = invoke(name)
+    task = Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 1_000) end)
+    await_waiters(owner, id, 1)
+    assert {:ok, :cancelled} = GenAgentServer.cancel(name, id)
+    assert {:ok, :failed, :cancelled} = Task.await(task)
+    assert :sys.get_state(owner).waiters == %{}
+  end
+
+  test "waiting leaves other calls free and expires without cancelling" do
+    {name, _ensemble, owner} = fixture()
+    {id, _, _} = invoke(name)
+    started = System.monotonic_time(:millisecond)
+    task = Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 200) end)
+    await_waiters(owner, id, 1)
+    assert {:ok, :pending} = GenAgentServer.result(name, id)
+    assert {:ok, :pending} = GenAgentServer.result(name, id, wait_ms: 0)
+    assert {:ok, [_]} = GenAgentServer.invocations(name)
+    {_other, _, _} = invoke(name)
+    assert Task.yield(task, 0) == nil
+    assert {:ok, :pending} = Task.await(task)
+    assert System.monotonic_time(:millisecond) - started >= 200
+    assert :sys.get_state(owner).waiters == %{}
+    assert {:ok, :pending} = GenAgentServer.result(name, id)
+  end
+
+  test "wait validation precedes lookup and CLI and ops accept waiting" do
+    for wait <- [-1, 600_001, 1.0, nil, "10", false] do
+      assert {:error, :invalid_wait} = GenAgentServer.result("missing", "missing", wait_ms: wait)
+    end
+
+    {name, _ensemble, _owner} = fixture()
+    {id, _, _} = invoke(name)
+    assert {:error, :not_found} = GenAgentServer.result(name, "missing", wait_ms: 600_000)
+
+    assert {:ok, "pending"} =
+             GenAgentServer.CLI.run(["--instance", name, "result", id, "--wait", "1"])
+
+    assert {:error, :invalid_wait} = GenAgentServer.CLI.run(["result", id, "--wait", "bad"])
+    assert {:error, :invalid_wait} = GenAgentServer.CLI.run(["result", id, "--wait", "600001"])
+
+    assert {:ok, %{status: "pending"}} =
+             GenAgentServer.Ops.call("result", %{"instance" => name, "id" => id, "wait_ms" => 1})
+  end
+
+  test "result rejects malformed options before looking up an instance" do
+    for opts <- [
+          %{},
+          nil,
+          :wait,
+          [:wait_ms],
+          [{"wait_ms", 1}],
+          [other: 1],
+          [wait_ms: 1, other: 2]
+        ] do
+      assert {:error, :invalid_options} = GenAgentServer.result("missing", "missing", opts)
+    end
+  end
+
+  test "wait expiry collects a completion before reporting pending" do
+    {name, ensemble, owner} = fixture()
+    {id, token, _} = invoke(name)
+    task = Task.async(fn -> GenAgentServer.result(name, id, wait_ms: 100) end)
+    await_waiters(owner, id, 1)
+    assert :ok = GenServer.call(ensemble, {:entries, [{token, {:ok, :finished}}]})
+    assert {:ok, :completed, :finished} = Task.await(task)
+    assert :sys.get_state(owner).waiters == %{}
+  end
+
+  test "CLI wait errors name the option and missing invocation" do
+    alias GenAgentServer.CLI
+    assert CLI.error_message([], :usage) =~ "result ID [--wait MS]"
+    assert CLI.error_message([], :invalid_wait) == "--wait must be an integer from 0 to 600000"
+
+    assert CLI.error_message(
+             ["--instance", "review", "result", "absent", "--wait", "10"],
+             :not_found
+           ) ==
+             "invocation absent not found in instance review"
+  end
+
+  defp await_waiters(owner, id, count, attempts \\ 100)
+  defp await_waiters(_owner, _id, _count, 0), do: flunk("waiters were not registered")
+
+  defp await_waiters(owner, id, count, attempts) do
+    if map_size(Map.get(:sys.get_state(owner).waiters, id, %{})) == count do
+      :ok
+    else
+      Process.sleep(1)
+      await_waiters(owner, id, count, attempts - 1)
+    end
   end
 
   defp invoke(name, opts \\ []) do

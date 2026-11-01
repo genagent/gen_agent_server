@@ -90,6 +90,11 @@ defmodule GenAgentServer.MCP.Shared.Tools do
     schema =
       put_in(schema, ["properties", "instance", "description"], "Explicit allowed instance name")
 
+    schema = put_in(schema, ["properties", "wait_ms", "maximum"], 5000)
+
+    schema =
+      put_in(schema, ["properties", "wait_ms", "description"], "Wait 0..5000 ms (default 0)")
+
     input_schema(schema)
 
     @impl true

@@ -116,8 +116,22 @@ defmodule GenAgentServer.Ops do
         "result",
         "Read an invocation result. Repeatable until evicted.",
         false,
-        [instance(), req("id", :string, "Invocation ID")],
-        fn a -> result_data(a["id"], GenAgentServer.result(a["instance"], a["id"])) end
+        [
+          instance(),
+          req("id", :string, "Invocation ID"),
+          opt(
+            "wait_ms",
+            :integer,
+            "Wait for a terminal result, 0 to 600000 milliseconds (default 0)"
+          )
+          |> Map.put(:schema, %{"minimum" => 0, "maximum" => 600_000})
+        ],
+        fn a ->
+          result_data(
+            a["id"],
+            GenAgentServer.result(a["instance"], a["id"], wait_ms: Map.get(a, "wait_ms", 0))
+          )
+        end
       ),
       op(
         "ask",

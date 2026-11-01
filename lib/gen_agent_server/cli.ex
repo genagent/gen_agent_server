@@ -43,15 +43,26 @@ defmodule GenAgentServer.CLI do
   end
 
   defp run_instance(instance, ["result", id], _source) do
-    case GenAgentServer.result(instance, id) do
+    present_result(instance, id, 0)
+  end
+
+  defp run_instance(instance, ["result", id, "--wait", raw], _source) do
+    case Integer.parse(raw) do
+      {wait, ""} -> present_result(instance, id, wait)
+      _ -> {:error, :invalid_wait}
+    end
+  end
+
+  defp run_instance(_instance, _args, _source), do: {:error, :usage}
+
+  defp present_result(instance, id, wait_ms) do
+    case GenAgentServer.result(instance, id, wait_ms: wait_ms) do
       {:ok, :pending} -> {:ok, "pending"}
       {:ok, :completed, response} -> {:ok, presented_answer(response)}
       {:ok, :failed, reason} -> {:error, reason}
       error -> error
     end
   end
-
-  defp run_instance(_instance, _args, _source), do: {:error, :usage}
 
   def main(args, source \\ :local_cli) do
     :ok = :io.setopts(:standard_io, encoding: :unicode)
@@ -87,8 +98,14 @@ defmodule GenAgentServer.CLI do
 
   def error_message(args, :not_found) do
     case command(args) do
-      {["result", id], instance} -> "invocation #{id} not found in instance #{instance}"
-      {_command, instance} -> "requested item not found in instance #{instance}"
+      {["result", id, "--wait", _], instance} ->
+        "invocation #{id} not found in instance #{instance}"
+
+      {["result", id], instance} ->
+        "invocation #{id} not found in instance #{instance}"
+
+      {_command, instance} ->
+        "requested item not found in instance #{instance}"
     end
   end
 
@@ -102,12 +119,15 @@ defmodule GenAgentServer.CLI do
     "instance #{instance} is busy"
   end
 
+  def error_message(_args, :invalid_wait),
+    do: "--wait must be an integer from 0 to 600000"
+
   # An extension command can return a message ready to print.
   def error_message(_args, {:message, text}) when is_binary(text), do: text
 
   def error_message(_args, :usage),
     do:
-      "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID"
+      "usage: gen_agent_server instances | [--instance NAME] agents | status | ask PROVIDER PROMPT | invoke PROVIDER PROMPT | result ID [--wait MS]"
 
   def error_message(args, {:unknown_agent, name}) do
     {_command, instance} = command(args)
