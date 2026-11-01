@@ -1,6 +1,6 @@
 # Agent session spec
 
-Status: draft 0.3, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1 and 0.2 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
+Status: draft 0.4, 2026-11-01. Derived from the `agent` spike (#140) and procedure runs 1 to 6. The history and evidence are in [agent-interface.md](agent-interface.md) and in the run records on the `docs/issue-process` branch (#134). Drafts 0.1, 0.2 and 0.3 were each reviewed by one Claude and one Codex session; Appendix D lists what changed.
 
 Sections 1 to 9 are normative, except where a section says otherwise. Section 10 and the appendices are not normative. The spec assumes a POSIX host: process groups, signals and per-user file permissions.
 
@@ -86,7 +86,7 @@ Result: the submitted invocation (section 4.7).
 | `invocation_id` | string | the session's latest invocation |
 | `wait_ms` | integer, 0 to 600000 | 0 |
 
-"Latest" is the invocation with the highest `n`, whatever its status, resolved once when the call is accepted. Result: the invocation. Reading a result does not consume it. The same id returns the same terminal result until it is evicted (section 5.13). Works on live and ended sessions.
+"Latest" is the invocation with the highest `n`, whatever its status, resolved once when the call is accepted. Result: the invocation. Reading a result does not consume it. The same id returns the same terminal result until it is evicted (section 5.13). Works on live and ended sessions. An `invocation_id` whose session part differs from `session_id` fails with `invocation_not_found`.
 
 ### 4.3 `agent_cancel`
 
@@ -94,7 +94,7 @@ Result: the submitted invocation (section 4.7).
 | --- | --- |
 | `session_id`, required | string |
 
-Cancels the running turn and every queued invocation accepted before this call (section 5.4). The session stays open. Result: `{session_id, cancelled: [invocation_id], cleanup}`. `cancelled` lists only the invocations this call moved to `cancelled`. `cleanup` is `confirmed`, `pending` (section 5.12) or `none` when no turn was running.
+Cancels the running turn and every queued invocation accepted before this call (section 5.4). The session stays open. Result: `{session_id, cancelled: [invocation_id], cleanup}`. `cancelled` lists only the invocations this call moved to `cancelled`. `cleanup` is `none` only if no turn was running and no cleanup was outstanding when the call was accepted. Otherwise it is `confirmed` or `pending` according to the wrapper's cleanup evidence (section 5.12).
 
 ### 4.4 `agent_stop`
 
@@ -120,7 +120,7 @@ No parameters. Result:
 
 ```json
 {
-  "spec_version": "0.3",
+  "spec_version": "0.4",
   "layer_version": "...",
   "layer_instance_id": "01J...",
   "started_inside_agent_session": false,
@@ -150,7 +150,7 @@ The values shown are examples. `layer_instance_id` is unique per layer process; 
 | `duration_ms` | when terminal and started | `ended_at` minus `started_at`. Queue time is excluded. |
 | `provider_session_id` | once known | Reported as soon as the wrapper reports it (W2), including while `running`. |
 | `text` | when `completed` | The provider's final message. Possibly empty. |
-| `usage` | when known | Object of non-negative integers, this turn only (section 5.15). Counter names: `input_tokens`, `output_tokens`, `cached_input_tokens` (cache reads), `cache_write_input_tokens` (cache writes), `reasoning_output_tokens`. A counter the provider does not report is absent. |
+| `usage` | when known | Object of non-negative integers, this turn only (section 5.15). Counter names: `input_tokens`, `output_tokens`, `cached_input_tokens` (cache reads), `cache_write_input_tokens` (cache writes), `reasoning_output_tokens`. A counter the provider does not report is absent. `input_tokens` excludes `cached_input_tokens` and `cache_write_input_tokens`. `output_tokens` includes `reasoning_output_tokens`. The layer converts provider counts to these meanings before computing the differences in 5.15. |
 | `cost_usd` | when the provider reports cost | This turn only. |
 | `error` | when `failed` or `cancelled` | An error object (section 4.8). |
 | `delivered` | always | Boolean. Set to true when the layer returns this invocation in a terminal state from `agent` or `agent_result`, before the response is serialized, so the response that delivers it already shows true. It records an attempted return, not acknowledged receipt. Summaries in `agent_sessions` do not set it. |
@@ -224,7 +224,7 @@ Each rule names the run or review that led to it.
 
 **5.2 Session ids.** A session id MUST NOT be reused for the lifetime of the layer process, even after its record is evicted. Reuse fails with `session_exists`. Generated ids MUST NOT collide with any id used before. Two concurrent `agent` calls with the same `name` produce exactly one session; the other call fails with `session_exists`. A caller that wants a stable name across layer restarts uses `resume` (section 5.9). Ids are unique only within one layer instance; after a restart the same id can name a different session, which `layer_instance_id` distinguishes. The set of used ids grows with the layer's lifetime; it holds names only.
 
-**5.3 Provider session ownership.** Within one layer, a provider session id (with its provider) has at most one owner at a time. A session owns its provider session id from the moment the id is known until the session has ended and its last turn's cleanup is confirmed. Ownership survives eviction of the session's record. Adopting an owned id fails with `provider_session_in_use`. The layer cannot detect use of the same conversation outside itself, such as a person resuming it in a terminal. Callers MUST NOT do that while the layer owns it.
+**5.3 Provider session ownership.** Within one layer, a provider session id (with its provider) has at most one owner at a time. A session owns its provider session id from the moment the id is known until the session has ended and its last turn's cleanup is confirmed. Ownership is kept independently of session records: eviction never releases it, and it survives a layer restart through the recovery records of section 5.12. Adopting an owned id fails with `provider_session_in_use`. The layer cannot detect use of the same conversation outside itself, such as a person resuming it in a terminal. Callers MUST NOT do that while the layer owns it.
 
 **5.4 Ordering.** Each session has one total order of submissions, cancels, stops and terminal transitions.
 
@@ -269,16 +269,20 @@ Without `request_id`, a caller that loses a response cannot know whether the pro
 
 **5.11 Working directory.** `cwd` MUST be an absolute path. The layer stores it as given and does not resolve symlinks. It MUST exist when the session starts, or the call fails with `cwd_missing`. Before each turn the layer MUST check it again. If it is missing, that invocation fails with `cwd_missing`, the CLI is not started, and the session stays open for later prompts (run 6: a session removed its own worktree, and its next turn failed as an opaque exit 2).
 
-**5.12 Cancel and cleanup.** Cancelling a turn MUST stop its whole process tree: the CLI, the tools it started and their descendants.
+**5.12 Cancel and cleanup.** Each turn runs in its own process group (W5). Cancelling a turn MUST stop that process group: the CLI, the tools it started and their descendants that stay in the group. A descendant that leaves the group, for example through `setsid`, is outside this guarantee; reparented processes cannot be tracked portably.
 
 - When the wrapper confirms that the tree has exited, `cleanup` is `confirmed`.
 - When the wrapper has not confirmed it yet, `cleanup` is `pending`, and the session is in state `cleaning`. While a session is `cleaning`, no turn starts on its provider session; new submissions queue.
 - When the wrapper confirms exit, the session returns to `idle` or starts its next queued turn.
-- If `cleanup_ms` passes without confirmation, the session ends with `end_reason: cleanup_unconfirmed`, and its queued invocations are cancelled with `detail.by: cleanup_unconfirmed`. Its provider session id stays owned by the ended record (section 5.3) until the record is evicted.
+- If `cleanup_ms` passes without confirmation, the session ends with `end_reason: cleanup_unconfirmed`, and its queued invocations are cancelled with `detail.by: cleanup_unconfirmed`. Its provider session id stays owned (section 5.3) until cleanup is confirmed, including after the record is evicted. A group that is never confirmed keeps ownership for the life of the layer, and the next layer start handles it.
 - When a turn ends normally, the layer stops any descendants still running, as for a cancel. Background processes never outlive the turn that started them. The session is `cleaning` until that is confirmed.
 - A stop or shutdown closes admission at once and ends the session, while cleanup continues. Confirmation releases ownership and never reopens the session.
 - Repeated cancels while `cleaning` return `cleanup: pending` and do not reset the deadline.
-- The layer records the process group of every turn it starts in its state directory, and removes the record on confirmation. On start, before accepting requests, a layer MUST stop any recorded process groups from earlier instances that are still running.
+- **Recovery records.** For every turn, the layer writes a recovery record to its state directory, and the record is durable before the provider receives the prompt (the prompt goes on stdin, W7, after the record is written). A record holds the group id, the leader's pid and start time, the boot id, the provider and the provider session id once known. The layer removes the record when cleanup is confirmed.
+- **On start.** Before accepting requests, a layer reads the records left by earlier instances:
+  - It discards records from an earlier boot.
+  - It stops a recorded group only if the group leader is still running with the recorded start time. A numeric group id alone is never enough to signal.
+  - It discards the record once the group has exited. Until then, the provider session id in the record stays owned, and adopting it fails with `provider_session_in_use`.
 
 **5.13 Ended sessions and retention.** A session ends when it is stopped (`stopped`), idle past `idle_ms` (`idle`), unable to confirm cleanup (`cleanup_unconfirmed`), or ended by layer shutdown (`shutdown`).
 
@@ -289,7 +293,7 @@ Without `request_id`, a caller that loses a response cannot know whether the pro
 
 Run 6 is the reason for keeping results after a stop: two reviewer sessions that another agent started and stopped left no trace.
 
-**5.14 Nesting and callers.** A session can call the layer to start sessions of its own (run 6, recursive). The layer MUST make this work with no configuration in the child, over every surface.
+**5.14 Nesting and callers.** A session can call the layer to start sessions of its own (run 6, recursive). For a session whose access permits the tools a surface needs, nesting MUST need no configuration in the child, over every surface that access permits. This does not widen access: a Claude `read_only` session cannot run the CLI or reach MCP servers, so it cannot nest.
 
 - Each turn's environment carries these variables, and their names are normative:
 
@@ -300,7 +304,7 @@ Run 6 is the reason for keeping results after a stop: two reviewer sessions that
   | `AGENT_SESSION_ID` | This session's id. |
   | `AGENT_SESSION_DEPTH` | This session's depth. |
 
-- A surface started in an environment with `AGENT_SESSION_LAYER` MUST connect to that layer.
+- A surface started in an environment with `AGENT_SESSION_LAYER` MUST connect to that layer. If either `AGENT_SESSION_LAYER` or `AGENT_SESSION_TOKEN` is present, both MUST be nonempty. Otherwise the surface fails with `layer_unavailable` and does not fall back to the address file.
 - A surface that runs in the caller's environment (the stdio MCP surface and the CLI) sets `parent_session_id` from `AGENT_SESSION_ID`, only on `agent` calls without `session_id`, and only when the caller passes none. A client of the layer's endpoint (section 6.2) passes it explicitly. Explicit and implicit values are validated the same way: they MUST name a session in this layer, live or ended, or the call fails with `session_not_found`.
 - The layer derives depth from the parent's record. A new session at a depth above `max_depth` fails with `depth_exceeded`.
 - Stopping, ending or evicting a parent does not affect its children. Children keep their `parent_session_id` and depth.
@@ -331,7 +335,8 @@ Run 6 is the reason for keeping results after a stop: two reviewer sessions that
 
 Rules for the steps:
 
-- Credentials and provider routing variables MUST pass through steps 1 and 2 unchanged: `ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the exceptions in step 1.
+- Steps 1 and 2 MUST NOT remove the pass-through set. That set is exactly `ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the exceptions in step 1, and the operator's pass list. Any other variable that step 1 matches is removed.
+- The operator's overrides in step 4 MUST NOT replace the four variables of section 5.14.
 - Environment values are never copied into results, records or logs.
 - A layer SHOULD be started from a login environment, not from inside an agent session. `agent_info.started_inside_agent_session` reports when it was not.
 
@@ -364,19 +369,19 @@ A surface MAY lower the `wait_ms` cap. It reports the cap in `agent_info.surface
 
 ### 6.2 The layer endpoint and discovery
 
-- **One layer per user per machine.** The layer holds an exclusive lock on `layer.lock` next to its address file for its whole life. A second layer that cannot take the lock exits, and whoever started it connects to the first.
-- **Endpoint.** The layer serves the six operations as an MCP server over Streamable HTTP on a loopback address, at `http://127.0.0.1:<port>/mcp`. Tools, schemas, results and errors are as in section 6.3. This endpoint is the interoperability boundary. Any surface can talk to any conforming layer, and a client that speaks MCP can use the endpoint directly.
-- **Token.** Every request carries `Authorization: Bearer <token>`. Requests without a valid token fail with `unauthorized` before any operation runs. Other local users can reach a loopback address, so the token is the barrier. It has at least 128 bits of randomness and is generated at each layer start.
+- **One layer per user per machine.** The layer holds a POSIX `fcntl` write lock covering the whole of `layer.lock`, next to its address file, for the life of the layer process. The file is never removed or replaced. A second layer that cannot take the lock exits, and whoever started it connects to the first.
+- **Endpoint.** The layer serves the six operations as an MCP server over Streamable HTTP on a loopback address, at `http://127.0.0.1:<port>/mcp`. Tools, schemas, results and errors are as in section 6.3. The endpoint MUST support MCP protocol version 2025-06-18 or later. This endpoint is the interoperability boundary. Any surface can talk to any conforming layer, and a client that speaks MCP can use the endpoint directly.
+- **Token.** Every HTTP request carries `Authorization: Bearer <token>`, including initialization and stream requests. The endpoint rejects a missing or invalid token with HTTP 401 before MCP dispatch, with the body `{"error": <error object with code unauthorized>}`. The stdio MCP surface and the CLI map it to `unauthorized` in their own error forms. Other local users can reach a loopback address, so the token is the barrier. It has at least 128 bits of randomness and is generated at each layer start.
 - **Address file.** The layer writes `$XDG_STATE_HOME/agent-session/layer.json`, or `~/.local/state/agent-session/layer.json` when `XDG_STATE_HOME` is unset. The file has mode 0600 and contains `{"endpoint", "token", "spec_version", "layer_instance_id", "pid", "started_at"}`. The layer's state directory, with the process group records of section 5.12, is the same directory.
 - **Discovery.** A surface takes the endpoint and token from `AGENT_SESSION_LAYER` and `AGENT_SESSION_TOKEN` when both are set, and from the address file otherwise.
   - An address file whose endpoint does not answer, while `layer.lock` is free, is stale.
-  - A surface MUST refuse a layer whose `spec_version` has a different major version, with `layer_unavailable`.
+  - A surface MUST refuse a layer whose `spec_version` differs in major version, or, while the major version is 0, in minor version, with `layer_unavailable`.
 - **Starting a layer.** If no layer is reachable, the stdio MCP surface MAY start one in the background, wait for its address file, and connect. The CLI MUST NOT start one implicitly. It fails with `layer_unavailable` and names the command that does. A layer outlives whatever started it, so sessions outlive every client (section 5.5).
 
 ### 6.3 MCP
 
 - The MCP surface offers one tool per operation. The input schema is the operation's parameter table as JSON Schema, with `additionalProperties: false`.
-- The result is the operation's JSON result as `structuredContent`, plus a short text rendering in `content`. An operation error is a tool result with `isError: true` and `structuredContent: {"error": <error object>}`. Surface errors (`layer_unavailable`, `unauthorized`) use the same envelope.
+- The result is the operation's JSON result as `structuredContent`, plus a short text rendering in `content`. An operation error is a tool result with `isError: true` and `structuredContent: {"error": <error object>}`. Surface errors (`layer_unavailable`, `unauthorized`) use the same envelope. Parameter and schema violations MUST be returned as a tool result with code `invalid_args`, never as a JSON-RPC error.
 - The stdio MCP surface, started by the host, proxies every tool call to the layer endpoint and applies the environment defaults of section 5.14. It holds no sessions itself.
 
 ### 6.4 CLI
@@ -388,7 +393,7 @@ A surface MAY lower the `wait_ms` cap. It reports the cap in `agent_info.surface
   - The reason: in run 6 a prompt built in an unquoted shell heredoc lost three phrases to command substitution.
 - The CLI writes the JSON result to stdout. Its exit status:
   - 0 when the operation succeeds, including when it returns a `failed` invocation;
-  - 1 for an operation error, with the error object on stderr;
+  - 1 for an operation error, with the bare error object on stderr: the same object as `structuredContent.error`;
   - 2 for `layer_unavailable` or `unauthorized`.
 - `serve` starts a layer in the foreground. `init` installs the host-integration profile when the implementation offers it (section 7).
 - With a reachable layer, `agent-info` and `agent-sessions` MUST each finish within 300 ms at the 95th percentile. This is measured from process start to exit, over 100 runs after one warm-up, on the machine running the conformance suite, with 8 parallel callers. The CLI is a client of the layer endpoint. Parallel invocations MUST NOT serialize on a lock of their own (run 6: Mix build-lock contention).
@@ -420,7 +425,7 @@ It also teaches the three patterns in C1 to C3, how to pass the caller's own mod
 
 | Hook | Host event | Behaviour |
 | --- | --- | --- |
-| Caller id | none | The host starts one stdio MCP surface per host session. That surface reads the host session id from its own environment (Claude Code sets `CLAUDE_CODE_SESSION_ID`) and passes it as `caller_id` on `agent` calls without `session_id`. Hooks receive the same id in their input and filter `agent_sessions` by it. Where the host does not expose the id to the surface, there is no `caller_id`, and the brief and the check fall back to listing by `parent_session_id`. |
+| Caller id | none | The host starts one stdio MCP surface per host session. Only a stdio MCP surface installed by this profile sets `caller_id`. It reads the host session id from its own environment (Claude Code sets `CLAUDE_CODE_SESSION_ID`) and passes it on `agent` calls without `session_id`. Hooks receive the same id in their input and filter `agent_sessions` by it. When the caller is itself a layer session, hooks filter by `parent_session_id` from `AGENT_SESSION_ID`. With neither identity, the caller-scoped hooks are unavailable and MUST NOT list unfiltered. |
 | Completion notice | Claude Code: a monitor or a background hook that can wake the session. Codex: a background hook, delivered at the next safe point. | Tells the caller when one of its invocations has become terminal and is not yet `delivered`. Codex does not wake an idle session, so the notice can be late. |
 | Brief | Session start, including resume and after compaction | A factual list of the caller's live and recently ended sessions and its pending or undelivered invocations, under 1,500 characters. |
 | Check once at the end | `Stop`, honouring `stop_hook_active` | If the caller has terminal invocations with `delivered: false`, block once and name them. |
@@ -439,7 +444,7 @@ What the layer needs from a provider wrapper, stated as capabilities. A wrapper 
 | W2 | Report the provider session id as soon as the provider emits it, before the turn ends. | 4.7, 5.3, 5.19 |
 | W3 | Apply the same model, effort and access options on fresh and resumed turns. | 5.8, 5.10 |
 | W4 | Express `inherit` as in section 5.10: no permission flags, with Codex approval prompts off. Express each narrowing value. | 5.10 |
-| W5 | Run each turn in its own process group, report the group id, stop the whole group on request, and confirm when it has exited, also after a turn that ended normally. | 5.12 |
+| W5 | Run each turn in its own process group, and report the group id, the leader's pid and the leader's start time before the prompt is delivered. Stop the whole group on request, and confirm when every member has exited, also after a turn that ended normally. | 5.12 |
 | W6 | Set and unset child environment variables per turn, with unsets honoured on every spawn path. | 5.14, 5.17 |
 | W7 | Deliver the prompt without an argv size limit (stdin or a file), and keep it out of the process table. | 4.1, 5.18 |
 | W8 | Impose no turn timeout unless configured. | 5.16 |
@@ -454,20 +459,20 @@ A wrapper gap MUST be fixed in the wrapper, not worked around in the layer. Run 
 
 ## 9. Conformance
 
-An implementation conforms when it passes C1 to C21, against fake CLIs in automated tests, and C1 to C5 and C7 against the real CLIs in a live smoke run. A fake CLI is a test executable that records its argv, environment and stdin, and emits provider-shaped output on cue.
+An implementation conforms when it passes C1 to C21, against fake CLIs in automated tests, and C1 to C5 and C7 against the real CLIs in a live smoke run. A fake CLI is a test executable that records its argv, environment and stdin, and emits provider-shaped output on cue. A wrapper test double, which reports outcomes and cleanup evidence on cue, is allowed where a scenario says so.
 
 | Id | Scenario | Checks |
 | --- | --- | --- |
 | C1 | Single-use: one `agent` call with a whole task, `agent_result` until terminal, `agent_stop`. | Terminal result. The ended record is readable. No descendant process of the session remains. |
 | C2 | Counterpart: one session, three turns, plus two follow-ups submitted while the second turn runs. | The same provider session id on every turn. The invocations run in submission order. Per-turn usage on each. |
 | C3 | Recursive: a session starts a child session through the MCP surface and through the CLI, with no configuration, using the variables in 5.14. The child runs two turns and is stopped by its parent. | The child's `parent_session_id` and depth. Both children are visible in the same layer and listed with `include_ended`. |
-| C4 | Restart: during a running first turn, after its `provider_session_id` is reported, shut the layer down gracefully while a caller waits on the invocation. Start a new layer and call `agent` with `resume`. Repeat with the layer killed instead, leaving the fake CLI running. | The waiter receives `cancelled` with `detail.by: shutdown`. The conversation continues and the prompt is not resent. After the kill, the new layer stops the leftover process group before accepting requests. |
-| C5 | Cleanup: cancel a turn whose fake CLI has started a long-running descendant; end a turn normally with a descendant still running; cancel a turn whose fake CLI started a descendant in a new session, outside its process group. | First two: `cleanup` becomes `confirmed` within `cleanup_ms`, and an observer outside the layer finds no descendant left. Third: the session is `cleaning`, new turns wait, and after `cleanup_ms` the session ends with `cleanup_unconfirmed` and keeps ownership. |
+| C4 | Restart: during a running first turn, after its `provider_session_id` is reported, shut the layer down gracefully while a caller waits on the invocation. Start a new layer and call `agent` with `resume`. Repeat with the layer killed instead, leaving the fake CLI running; then with a recovery record whose leader pid now belongs to an unrelated process. | The waiter receives `cancelled` with `detail.by: shutdown`. The conversation continues and the prompt is not resent. After the kill, the new layer stops the leftover process group before accepting requests, and refuses to adopt its provider session until then. The unrelated process is not signalled. |
+| C5 | Cleanup: cancel a turn whose fake CLI has started a long-running descendant; end a turn normally with a descendant still running; cancel a turn through a wrapper test double that withholds cleanup confirmation. | First two: `cleanup` becomes `confirmed` within `cleanup_ms`, and an observer outside the layer finds no member of the turn's process group left. Third: the session is `cleaning`, new turns wait, and after `cleanup_ms` the session ends with `cleanup_unconfirmed` and keeps ownership, also after its record is evicted. |
 | C6 | Working directory: remove the cwd between turns, then restore it. | `cwd_missing` on that invocation, the CLI not started, and the next turn runs. |
 | C7 | Access: a `read_only` session's resumed turn, and an `inherit` session's turns. | The fake CLI's argv carries the narrowing on the resumed turn. `inherit` passes no permission flags. Live, a write attempt in the `read_only` session fails. |
 | C8 | Usage: running totals over four turns, with one turn missing its total, then a decrease. | Per-turn values follow 5.15 exactly. |
 | C9 | Environment: the layer's environment holds a runtime boot variable, a parent-session marker, an operator strip entry, a credential sharing the marker's prefix, and an unrelated variable. | The child lacks the first three, and has the credential, the unrelated variable and the variables in 5.14. |
-| C10 | Surfaces: C1 to C3 and C11 through the stdio MCP surface, the CLI and the layer endpoint directly. | Results are identical apart from ids, timestamps, durations, text and usage values. Error codes are identical. |
+| C10 | Surfaces: C1 to C3 and C11 through the stdio MCP surface, the CLI and the layer endpoint directly. | Results are identical apart from ids, timestamps, durations, text, usage values and `caller_id`. Error codes are identical. |
 | C11 | Errors: trigger every operation error code in 4.8. | Each returns its code and creates or changes nothing. |
 | C12 | Races: a cancel racing completion; submissions racing a cancel; a stop during a wait; two `agent` calls with the same `name`. | The rules in 5.2, 5.4 and 5.7. |
 | C13 | Waits and disconnects: `wait_ms` expiry on queued and running invocations; a caller that disconnects mid-wait. | The pending status is returned at expiry. The turn continues and its result is held. |
@@ -475,11 +480,11 @@ An implementation conforms when it passes C1 to C21, against fake CLIs in automa
 | C15 | Idempotency: resend with the same `request_id`, then with the same key and different parameters. | The original invocation, then `request_conflict`. |
 | C16 | Long turn: a fake turn that runs past every wrapper default idle bound, at least 10 minutes. | It completes. |
 | C17 | Prompt handling: a prompt over 1 MiB containing a 64-byte sentinel, sent to a fake CLI that echoes it to stderr and exits nonzero. | The sentinel is in no process's argv, and in no log, telemetry event or error `detail`. |
-| C18 | CLI arguments: `@path`, `@-` and `@@`, and timing of `agent-info` under 8 parallel callers. | Exact values. The bound in 6.4. |
-| C19 | Endpoint and discovery: a request without a token, with a wrong token; two layers started at once; a stale address file; a layer with a different major `spec_version`. | `unauthorized`; one layer runs and the other exits; the stale file is replaced; `layer_unavailable`. |
+| C18 | CLI arguments: `@path`, `@-` and `@@`, and timing of `agent-info` and `agent-sessions` under 8 parallel callers. | Exact values. The bound in 6.4 for both commands. |
+| C19 | Endpoint and discovery: a request without a token, with a wrong token; a schema violation; two layers started at once; a stale address file; a layer with a different `spec_version` minor version; `AGENT_SESSION_LAYER` set without `AGENT_SESSION_TOKEN`. | HTTP 401 mapped to `unauthorized`; `invalid_args` as a tool result; one layer runs and the other exits; the stale file is replaced; `layer_unavailable`; `layer_unavailable` with no fallback. |
 | C20 | Ownership and access: adopt a provider session owned by a live session; change the user's Claude configuration between two `inherit` turns. | `provider_session_in_use` naming the owner; the second turn sees the new configuration. |
 | C21 | `agent_info` accuracy: submit every listed `provider`, `effort` and `access` value, and one unlisted value of each. | Listed values are accepted; unlisted ones fail with `invalid_option`. |
-| H1 | Host-integration profile, when offered: `init` on both hosts; from each host, submit through the MCP tools without waiting and make no terminal read. | Tools listed under the plugin's names. A completion notice reaches the caller by its next turn at the latest. The brief lists the caller's sessions. With the plugin's hooks disabled, C1 still passes. |
+| H1 | Host-integration profile, when offered: `init` on both hosts; from each host, submit through the MCP tools without waiting and make no terminal read. | Tools listed under the plugin's names. Where an identity channel exists: a completion notice reaches the caller by its next turn at the latest, and the brief lists the caller's sessions. With the plugin's hooks disabled, C1 still passes. |
 
 ## 10. Evaluation of the working hypothesis (not normative)
 
@@ -550,6 +555,29 @@ The operations are shaped after the subagent tools that Claude Code and Codex gi
 As in both native tools, a call has no permission parameter beyond `access`, and there is no turn limit.
 
 ## Appendix D. Changes (non-normative)
+
+### 0.3 to 0.4
+
+From the third-round reviews, which found only small blocking items:
+
+- **Ownership.** Kept independently of records. Eviction never releases it, and recovery records carry it across restarts (5.3, 5.12).
+- **Cleanup.**
+  - The guarantee is the turn's process group, with escaped descendants stated as outside it (5.12, W5).
+  - Recovery records are durable before the prompt is delivered.
+  - They identify the leader by pid, start time and boot id, so a reused id is never signalled.
+  - `cleanup: none` is defined precisely (4.3).
+- **Endpoint.**
+  - An `fcntl` lock.
+  - HTTP 401 before MCP dispatch.
+  - Schema violations as `invalid_args` tool results.
+  - MCP 2025-06-18 or later.
+  - Minor-version checks while the spec is 0.x (6.2, 6.3).
+  - The CLI's stderr carries the bare error object (6.4).
+- **Usage.** Counter meanings are normalized across providers (4.7).
+- **Environment.** An exact pass-through set. Overrides cannot replace the session variables. Both discovery variables or neither, with no fallback (5.14, 5.17).
+- **Nesting.** Conditional on access permitting the needed tools (5.14).
+- **Profile.** Only the profile's stdio surface sets `caller_id`. Caller-scoped hooks need an identity channel (7.3).
+- **Conformance.** C4, C5, C10, C18, C19 and H1 updated to match.
 
 ### 0.2 to 0.3
 
