@@ -19,8 +19,7 @@ defmodule GenAgentServer.InstanceSpec do
   Every value is checked before anything starts. Unknown keys are rejected, so
   clients cannot supply modules, raw backend options, or pattern specs. Each
   route becomes a `GenAgentEnsemble.Agents.Simple` agent whose options come from
-  `GenAgentServer.Providers.backend_opts/2`, so Claude uses a limited toolset
-  and Codex a read-only sandbox unless the route opts in. Route descriptions
+  `GenAgentServer.Providers.backend_opts/2`, with inherited CLI access by default. Route descriptions
   include `review_read_only_explicit`, true only when a Claude/Codex route
   explicitly configured its read-only mode, false otherwise. This provenance
   field is not sent as a backend option. Atoms come from fixed
@@ -28,8 +27,9 @@ defmodule GenAgentServer.InstanceSpec do
 
   Route keys: `name`, `provider`, and, per provider, `model`, `effort`, `cwd`
   (absolute; defaults to the top-level `cwd`), `claude_permission_mode`
-  (`read_only`, `plan`, `accept_edits`), `codex_sandbox` (`read_only`, `workspace_write`),
-  `codex_user_config` (`ignore`, `inherit`), and `codex_response_text`
+  (`inherit` by default, `read_only`, `plan`, `accept_edits`, `auto`,
+  `bypass_permissions`, `dont_ask`), `codex_sandbox` (`inherit` by default, `read_only`, `workspace_write`),
+  `codex_user_config` (`inherit` by default, `ignore`), and `codex_response_text`
   (`all_messages`, `final_message`). `echo` takes no other keys.
   """
 
@@ -42,9 +42,9 @@ defmodule GenAgentServer.InstanceSpec do
     "codex" => ~w(model effort cwd codex_sandbox codex_user_config codex_response_text)
   }
   @choices [
-    claude_permission_mode: [:read_only, :plan, :accept_edits],
-    codex_sandbox: [:read_only, :workspace_write],
-    codex_user_config: [:ignore, :inherit],
+    claude_permission_mode: Providers.access_choices(:claude_permission_mode),
+    codex_sandbox: Providers.access_choices(:codex_sandbox),
+    codex_user_config: Providers.access_choices(:codex_user_config),
     codex_response_text: [:all_messages, :final_message]
   ]
 

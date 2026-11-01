@@ -36,12 +36,25 @@ iex> {:ok, id} = GenAgentServer.invoke("codex", "Find the test entry points")
 iex> GenAgentServer.result(id)
 ```
 
-The Claude backend uses plan permission mode. Codex uses a read-only sandbox
-with approvals disabled and ignores the host user's Codex configuration by
-default. Both keep their native project instructions and separate provider
-sessions. `mix gen_agent_server ask PROVIDER PROMPT`
-starts a fresh application for a single request; use IEx for a persistent
-multi-turn session.
+<a id="provider-access"></a>
+
+Access defaults to `inherit` for profiles, startup agents, dynamic routes, and
+pattern agents. Inheritance omits server permission-mode, tools, sandbox, and
+ignore-user-config overrides and uses the server process user's CLI settings.
+It does not transfer transient client permissions automatically. Headless
+sessions cannot answer prompts; Codex retains approvals disabled. Effective
+access depends on CLI configuration and host permissions.
+
+Claude accepts `inherit`, `read_only`, `plan`, `accept_edits`, `auto`,
+`bypass_permissions`, and `dont_ask`. Explicit `read_only` uses `dontAsk` with
+only Read, Grep, and Glob; other explicit modes do not restrict tools.
+Codex sandbox accepts `inherit`, `read_only`, and `workspace_write`.
+Codex user config accepts `inherit` (default) or `ignore`; reproducing the
+previous complete Codex configuration requires both `read_only` and `ignore`.
+
+Both keep their native project instructions and separate provider sessions.
+`mix gen_agent_server ask PROVIDER PROMPT` starts a fresh application for a
+single request; use IEx for a persistent multi-turn session.
 
 ## Retained invocation summaries (issue #75, first increment)
 
@@ -151,24 +164,18 @@ running in the server after the short `invoke` RPC returns its ID.
 The default `server/default` instance remains available and uses
 `GEN_AGENT_SERVER_PROVIDERS` and `GEN_AGENT_SERVER_CWD`. Profile names must be
 unique and cannot contain `/` or control characters. A missing directory,
-unknown provider, or duplicate name fails startup. Profiles currently use the
-same read-only Claude/Codex settings as the default. A profile can opt in to
-edits with
-`"codex_sandbox": "workspace_write"` and/or
-`"claude_permission_mode": "accept_edits"`. Codex then uses its workspace
-write sandbox with approvals disabled; Claude uses its CLI's accept-edits
-permission mode. These are provider controls, not a server-enforced file
-allowlist. Use a separate worktree for coding tasks and review changes before
-merging. The server rejects broader Codex sandbox modes and Claude's bypass
-mode from profile configuration.
+unknown provider, or duplicate name fails startup. Profiles use the same
+[inherited provider access defaults](#provider-access) as startup agents and
+support the same explicit access settings. These are provider controls, not a
+server-enforced file allowlist. Use a separate worktree for coding tasks and
+review changes before merging.
 
-`"codex_user_config"` accepts `"ignore"` (the default) or `"inherit"`.
-Ignoring passes the Codex CLI's `--ignore-user-config` option on fresh and
-resumed turns, avoiding host-specific MCP servers, model defaults, and other
-settings in the operator's user configuration. `"inherit"` leaves those
-settings available to the CLI. The installed Codex CLI still handles its own
-authentication; this setting does not provide credentials. Pattern specs also
-accept `"codex_user_config"` with the same choices.
+`"codex_user_config": "ignore"` passes the Codex CLI's `--ignore-user-config`
+option on fresh and resumed turns, avoiding host-specific MCP servers, model
+defaults, and other settings in the operator's user configuration. The default,
+`"inherit"`, leaves those settings available to the CLI. The installed Codex
+CLI still handles its own authentication; this setting does not provide
+credentials. Pattern specs accept the same choices.
 
 `"codex_response_text"` accepts `"all_messages"` (the default) or
 `"final_message"`. The default joins every completed Codex agent message with

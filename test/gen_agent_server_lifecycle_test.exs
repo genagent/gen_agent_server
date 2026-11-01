@@ -106,7 +106,7 @@ defmodule GenAgentServer.LifecycleTest do
                "model" => "haiku-test",
                "effort" => "low",
                "cwd" => dir,
-               "claude_permission_mode" => "read_only",
+               "claude_permission_mode" => "inherit",
                "review_read_only_explicit" => false
              }
 
@@ -129,11 +129,12 @@ defmodule GenAgentServer.LifecycleTest do
       by_model = Map.new(started, &{&1[:model], &1})
 
       assert %{
-               permission_mode: :dont_ask,
-               tools: ["Read", "Grep", "Glob"],
                effort: :low,
                working_dir: ^dir
              } = Map.new(by_model["haiku-test"])
+
+      refute Keyword.has_key?(by_model["haiku-test"], :permission_mode)
+      refute Keyword.has_key?(by_model["haiku-test"], :tools)
 
       assert %{permission_mode: :accept_edits, effort: :max} = Map.new(by_model["opus-test"])
 
@@ -349,6 +350,40 @@ defmodule GenAgentServer.LifecycleTest do
       %{log: log}
     end
 
+    test "explicit old Codex configuration narrows fresh and resumed turns", %{
+      name: name,
+      dir: dir,
+      log: log
+    } do
+      config = %{
+        "cwd" => dir,
+        "routes" => [
+          %{
+            "name" => "coder",
+            "provider" => "codex",
+            "codex_sandbox" => "workspace_write",
+            "codex_user_config" => "ignore"
+          }
+        ]
+      }
+
+      assert {:ok, _} = Ops.call("create_instance", %{"instance" => name, "config" => config})
+
+      for prompt <- ["first", "second"] do
+        assert {:ok, %{status: "completed"}} =
+                 Ops.call("ask", %{"instance" => name, "agent" => "coder", "prompt" => prompt})
+      end
+
+      assert [fresh, resumed] = log |> File.read!() |> String.split("\n", trim: true)
+      assert fresh =~ "--sandbox workspace-write"
+      assert resumed =~ ~s(sandbox_mode="workspace-write")
+
+      for line <- [fresh, resumed] do
+        assert line =~ "--ignore-user-config"
+        assert line =~ ~s(approval_policy="never")
+      end
+    end
+
     test "model and effort reach fresh and resumed turns", %{name: name, dir: dir, log: log} do
       config = %{
         "cwd" => dir,
@@ -362,7 +397,8 @@ defmodule GenAgentServer.LifecycleTest do
                 "routes" => [
                   %{
                     "effort" => "high",
-                    "codex_sandbox" => "read_only",
+                    "codex_sandbox" => "inherit",
+                    "codex_user_config" => "inherit",
                     "codex_response_text" => "all_messages"
                   }
                 ]
@@ -382,7 +418,10 @@ defmodule GenAgentServer.LifecycleTest do
       for line <- [fresh, resumed] do
         assert line =~ ~s(model_reasoning_effort="high")
         assert line =~ "gpt-test"
-        assert line =~ "--ignore-user-config"
+        refute line =~ "--ignore-user-config"
+        refute line =~ "--sandbox"
+        refute line =~ "sandbox_mode"
+        assert line =~ ~s(approval_policy="never")
       end
     end
   end

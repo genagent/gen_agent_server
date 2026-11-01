@@ -20,9 +20,11 @@ Controller.cancel(controller, attempt) # {:ok, :requested}; inspect later acknow
 `spec` is the exact Ledger attempt specification shown below, with `kind: :work`
 or `kind: :review` and an inline `prompt`. A review must name a caller-recorded
 Ledger revision in `subject_revision_id` belonging to the same task. Reviews allow
-Echo or an explicitly configured `codex_sandbox: "read_only"` /
-`claude_permission_mode: "read_only"` route. Missing settings (even if the provider
-default is read-only), unknown permissions, plan and editing modes are rejected.
+Echo, a Codex route with both explicit `codex_sandbox: "read_only"` and
+`codex_user_config: "ignore"`, or an explicitly configured
+`claude_permission_mode: "read_only"` route. Codex reviews must ignore user
+configuration because user MCP tools can act outside the read-only sandbox. Missing or inherited settings, unknown permissions, and all other Claude modes
+are rejected, even when the CLI configuration itself limits access.
 The sanitized description preserves explicit access provenance without changing
 provider defaults. Task checkout must match both the manifest and sanitized
 route cwd exactly; Echo describes cwd as nil because it has no filesystem

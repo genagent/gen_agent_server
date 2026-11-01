@@ -296,6 +296,7 @@ defmodule GenAgentServer.Control.Controller do
   defp review_route?(%{
          provider: "codex",
          codex_sandbox: :read_only,
+         codex_user_config: :ignore,
          review_read_only_explicit: true
        }),
        do: true

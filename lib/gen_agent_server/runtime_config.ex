@@ -10,6 +10,13 @@ defmodule GenAgentServer.RuntimeConfig do
       import Config
       config :gen_agent_server, GenAgentServer.RuntimeConfig.from_env!()
 
+  CLI access inherits the server process user's CLI settings by omitting access
+  overrides. This does not transfer transient client permissions. Headless
+  sessions cannot answer prompts; Codex keeps approvals disabled. Access depends
+  on CLI configuration and host permissions. Startup options use the shared
+  private provider builder without application overrides; child environment
+  cleanup runs when the instance starts.
+
   Variables:
 
     * `GEN_AGENT_SERVER_PROVIDERS` -- comma-separated `echo`, `claude`, `codex`
@@ -19,12 +26,6 @@ defmodule GenAgentServer.RuntimeConfig do
     * `GEN_AGENT_SERVER_CONFIG` -- optional configuration file with named
       profiles
   """
-
-  @backends %{
-    "echo" => GenAgentEnsemble.Backends.Echo,
-    "claude" => GenAgent.Backends.Claude,
-    "codex" => GenAgent.Backends.Codex
-  }
 
   @doc "Keyword configuration for `:gen_agent_server`. Raises `ArgumentError` on invalid values."
   @spec from_env!(%{String.t() => String.t()}) :: keyword()
@@ -57,30 +58,11 @@ defmodule GenAgentServer.RuntimeConfig do
   end
 
   defp agent(provider, cwd) do
-    backend =
-      case Map.fetch(@backends, provider) do
-        {:ok, module} -> module
-        :error -> raise ArgumentError, "unknown provider: #{provider}"
-      end
+    unless GenAgentServer.Providers.known?(provider) do
+      raise ArgumentError, "unknown provider: #{provider}"
+    end
 
-    backend_opts =
-      case provider do
-        "echo" ->
-          [backend: backend]
-
-        "claude" ->
-          [backend: backend, working_dir: cwd, permission_mode: :plan]
-
-        "codex" ->
-          [
-            backend: backend,
-            working_dir: cwd,
-            sandbox: :read_only,
-            approval_policy: :never,
-            ignore_user_config: true
-          ]
-      end
-
+    {:ok, backend_opts} = GenAgentServer.Providers.startup_backend_opts(provider, cwd: cwd)
     {provider, GenAgentEnsemble.Agents.Simple, backend_opts}
   end
 end

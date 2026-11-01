@@ -53,9 +53,15 @@ defmodule GenAgentServer.MCPTest do
     assert {:ok, %{"contents" => [%{"text" => guide, "mimeType" => "text/markdown"}]}} =
              Snodo.Client.read_resource(client, "gen-agent://guide/quickstart")
 
-    assert guide =~ "to a read-only sandbox"
+    assert guide =~ "server process user's CLI settings apply"
     assert guide =~ "invoke"
     assert guide =~ "result"
+
+    assert {:ok, %{"contents" => [%{"text" => capabilities}]}} =
+             Snodo.Client.read_resource(client, "gen-agent://guide/capabilities")
+
+    assert capabilities =~
+             "MCP `create_instance` clients can request Claude `bypass_permissions` explicitly."
 
     assert {:error, _} = Snodo.Client.read_resource(client, "gen-agent://guide/unknown")
     assert {:error, _} = Snodo.Client.read_resource(client, "file:///tmp/secret")

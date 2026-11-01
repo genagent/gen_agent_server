@@ -28,3 +28,12 @@ MIX_QUIET=1 mix gen_agent_server.ops run_pattern \
 Pattern instances started directly with `GenAgentServer.start_pattern_instance/5`
 are part of the base server and do not need this extension. `run_pattern` is
 not on the MCP allowlist.
+
+CLI agents default to inherited access: server permission, tools, sandbox, and
+user-config overrides are omitted. Settings belong to the server process user;
+transient client permissions are not transferred. Headless sessions cannot
+answer prompts, and Codex retains approvals disabled. Access depends on CLI
+settings and host permissions. Specs accept `claude_permission_mode` values
+`inherit`, `read_only`, `plan`, `accept_edits`, `auto`, `bypass_permissions`, and
+`dont_ask`; `codex_sandbox` accepts `inherit`, `read_only`, and `workspace_write`.
+`codex_user_config` accepts `inherit` (default) and `ignore` independently.

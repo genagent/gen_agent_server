@@ -332,23 +332,37 @@ defmodule GenAgentServer.Control.ControllerTest do
 
   # Fake described providers with real gated Invocations: admission boundary tests,
   # not paid Codex/Claude execution or mixed-provider issue-batch acceptance.
-  for {provider, key, mode} <- [
-        {"codex", "codex_sandbox", "read_only"},
-        {"codex", "codex_sandbox", "workspace_write"},
-        {"codex", "codex_sandbox", nil},
-        {"codex", "codex_sandbox", "unknown"},
-        {"claude", "claude_permission_mode", "read_only"},
-        {"claude", "claude_permission_mode", "plan"},
-        {"claude", "claude_permission_mode", "accept_edits"},
-        {"claude", "claude_permission_mode", nil},
-        {"claude", "claude_permission_mode", "unknown"}
+  for {provider, key, mode, user_config} <- [
+        {"codex", "codex_sandbox", "read_only", "ignore"},
+        {"codex", "codex_sandbox", "read_only", "inherit"},
+        {"codex", "codex_sandbox", "read_only", nil},
+        {"codex", "codex_sandbox", "workspace_write", "ignore"},
+        {"codex", "codex_sandbox", "inherit", "ignore"},
+        {"codex", "codex_sandbox", nil, "ignore"},
+        {"codex", "codex_sandbox", "unknown", "ignore"},
+        {"claude", "claude_permission_mode", "read_only", "ignore"},
+        {"claude", "claude_permission_mode", "plan", "ignore"},
+        {"claude", "claude_permission_mode", "accept_edits", "ignore"},
+        {"claude", "claude_permission_mode", "inherit", "ignore"},
+        {"claude", "claude_permission_mode", "auto", "ignore"},
+        {"claude", "claude_permission_mode", "bypass_permissions", "ignore"},
+        {"claude", "claude_permission_mode", "dont_ask", "ignore"},
+        {"claude", "claude_permission_mode", nil, "ignore"},
+        {"claude", "claude_permission_mode", "unknown", "ignore"}
       ] do
     @provider provider
     @key key
     @mode mode
-    test "configured review route boundary #{@provider} #{@mode || "missing"}" do
+    @user_config user_config
+    @config_fields if provider == "codex" and is_binary(user_config),
+                     do: %{"codex_user_config" => user_config},
+                     else: %{}
+    test "configured review route boundary #{@provider} #{@mode || "missing"} config #{@user_config || "missing"}" do
       route = %{"name" => "worker", "provider" => @provider}
       route = if @mode, do: Map.put(route, @key, @mode), else: route
+
+      route = Map.merge(route, @config_fields)
+
       config = %{"cwd" => File.cwd!(), "routes" => [route]}
 
       if @mode == "unknown" do
@@ -400,7 +414,7 @@ defmodule GenAgentServer.Control.ControllerTest do
                | requested_settings: %{@key => "mismatched"}
              }) == {:error, :settings_mismatch}
 
-      if @mode == "read_only" do
+      if @mode == "read_only" and (@provider == "claude" or @user_config == "ignore") do
         assert Controller.submit(c, "b", "worker", review) == {:error, :invalid_subject}
 
         assert Controller.submit(c, "a", "worker", %{review | subject_revision_id: "unknown"}) ==

@@ -9,7 +9,7 @@ defmodule GenAgentServer.Instance do
   normalized by `GenAgentServer.ChildEnv` on the way in. This covers the
   startup default agents from `config/runtime.exs` and direct
   `GenAgentServer.start_instance/3` callers, which do not go through
-  `GenAgentServer.Providers`. Custom `:strategy_opts` are passed through as
+  `GenAgentServer.Providers.backend_opts/2`. Custom `:strategy_opts` are passed through as
   given.
   """
 

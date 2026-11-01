@@ -1,6 +1,6 @@
 defmodule GenAgentServer.Profiles do
   @moduledoc """
-  Reads named, read-only project profiles for a running server.
+  Reads named project profiles with inherited CLI access by default for a running server.
 
   Profile names are instance names. Each profile has its own backend sessions
   and invocation results, even when two profiles use the same provider.
@@ -56,25 +56,13 @@ defmodule GenAgentServer.Profiles do
       raise ArgumentError, "profile #{name} contains unknown fields"
     end
 
-    codex_sandbox = Map.get(entry, "codex_sandbox", "read_only")
-    codex_user_config = Map.get(entry, "codex_user_config", "ignore")
+    codex_sandbox = access_choice!(entry, :codex_sandbox, name)
+    codex_user_config = access_choice!(entry, :codex_user_config, name)
+    claude_permission = access_choice!(entry, :claude_permission_mode, name)
     codex_response_text = Map.get(entry, "codex_response_text", "all_messages")
-    claude_permission = Map.get(entry, "claude_permission_mode", "plan")
-
-    unless codex_sandbox in ["read_only", "workspace_write"] do
-      raise ArgumentError, "profile #{name} has invalid codex_sandbox"
-    end
-
-    unless codex_user_config in ["ignore", "inherit"] do
-      raise ArgumentError, "profile #{name} has invalid codex_user_config"
-    end
 
     unless codex_response_text in ["all_messages", "final_message"] do
       raise ArgumentError, "profile #{name} has invalid codex_response_text"
-    end
-
-    unless claude_permission in ["plan", "accept_edits"] do
-      raise ArgumentError, "profile #{name} has invalid claude_permission_mode"
     end
 
     if Map.has_key?(entry, "codex_sandbox") and "codex" not in providers do
@@ -95,10 +83,10 @@ defmodule GenAgentServer.Profiles do
 
     provider_opts = [
       cwd: cwd,
-      codex_sandbox: String.to_existing_atom(codex_sandbox),
-      codex_user_config: String.to_existing_atom(codex_user_config),
+      codex_sandbox: codex_sandbox,
+      codex_user_config: codex_user_config,
       codex_response_text: String.to_existing_atom(codex_response_text),
-      claude_permission_mode: String.to_existing_atom(claude_permission)
+      claude_permission_mode: claude_permission
     ]
 
     agents =
@@ -112,5 +100,13 @@ defmodule GenAgentServer.Profiles do
 
   defp parse_profile!(_entry, _base) do
     raise ArgumentError, "each profile needs a name, cwd, and providers array"
+  end
+
+  defp access_choice!(entry, key, name) do
+    allowed = GenAgentServer.Providers.access_choices(key)
+    value = Map.get(entry, Atom.to_string(key), Atom.to_string(hd(allowed)))
+
+    Enum.find(allowed, &(Atom.to_string(&1) == value)) ||
+      raise ArgumentError, "profile #{name} has invalid #{key}"
   end
 end
