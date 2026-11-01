@@ -16,9 +16,9 @@ Acceptance:
 
 Defects:
 
-- **`lib/claude_wrapper/query.ex:1967` — autocompact rejects positive integers promised by the issue.** The implementation restricts inputs to 100,000–1,000,000, whereas the requested API is `:auto | pos_integer()`. For example, `autocompact: 200` raises before emission. Fix the type and guard to accept positive integers and emit their decimal representation; let the CLI validate its supported range. Update the range-specific documentation and tests at `test/claude_wrapper/query_test.exs:792`.
+- **`lib/claude_wrapper/query.ex:1967`: autocompact rejects positive integers promised by the issue.** The implementation restricts inputs to 100,000–1,000,000, whereas the requested API is `:auto | pos_integer()`. For example, `autocompact: 200` raises before emission. Fix the type and guard to accept positive integers and emit their decimal representation; let the CLI validate its supported range. Update the range-specific documentation and tests at `test/claude_wrapper/query_test.exs:792`.
 
-- **`lib/claude_wrapper/query.ex:125` — the expanded struct exceeds the repository’s configured Credo limit.** `.credo.exs:10` still sets `max_fields: 56`; the supplied host result reports 64. This leaves a required pre-commit check failing. Raise the configured allowance to accommodate the required fields, with a comment explaining the flat CLI option struct, then rerun strict Credo.
+- **`lib/claude_wrapper/query.ex:125`: the expanded struct exceeds the repository’s configured Credo limit.** `.credo.exs:10` still sets `max_fields: 56`; the supplied host result reports 64. This leaves a required pre-commit check failing. Raise the configured allowance to accommodate the required fields, with a comment explaining the flat CLI option struct, then rerun strict Credo.
 
 Beyond the requested scope:
 
