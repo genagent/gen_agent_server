@@ -33,7 +33,7 @@ try do
   {:ok, %{"contents" => [%{"text" => guide}]}} =
     Snodo.Client.read_resource(client, "gen-agent://guide/quickstart")
 
-  unless guide =~ "create_instance" and guide =~ "to a read-only sandbox",
+  unless guide =~ "create_instance" and guide =~ "CLI routes default to `inherit`",
     do: raise("MCP quickstart is incomplete")
 
   {:ok, legacy} =
